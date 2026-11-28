@@ -137,6 +137,7 @@ for (c, l) in enumerate(("(C)", "(D)", "(E)")); Label(fig[c, 3, TopLeft()], l, f
 colsize!(fig.layout, 1, Relative(0.4))                           # (the map as large as the record sections allow)
 ours = joinpath(@__DIR__, "matterhorn_fig2_$TAG.png"); save(ours, fig); println("saved $ours")
 page(joinpath(PRIVATE, "paper_figs", "fig2.png"), ours, "compare_fig2.png",
-     "Paper's panel A is a Google Earth view (not reproduced). Ours: receivers every 100 m along the N-S and W-E lines " *
+     "Paper's panel A is a Google Earth view (not reproduced). Map (B): the raw 10 m DEM, shaded relief (the simulation uses " *
+     "it smoothed with σ = 40 m). Ours: receivers every 100 m along the N-S and W-E lines " *
      "through the summit (local coordinates), Ormsby source; traces of each subfigure normalized to its maximum; time axis " *
      "shifted by $(@sprintf("%.1f", -TSH)) s as in Fig. 4. " * RES)
