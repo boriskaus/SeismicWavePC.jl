@@ -2,8 +2,8 @@
 # SV plane waves, P + 1.7 SV, Ormsby source; see matterhorn_2d.jl). Models 1-5 of the paper (a permafrost cap with
 # velocities × 1.3 and density × 1.1, 600, 450, 300, 150 m and 0 m thick below the summit: the paper shows the bodies only
 # as a sketch, so the thicknesses of models 2-4 are our choice) and the sensitivity study (Fig. 6C): 30 models, thickness
-# 100-600 m and velocity increase 10-50 %, amplitude reduction = 1 - PGV/PGV(model 5) of the horizontal motion at the
-# summit.
+# 100-600 m and velocity increase 10-50 %, amplitude reduction of the fundamental peak (0.25-0.6 Hz) of the horizontal
+# summit spectrum relative to model 5.
 #
 #   julia -t 4 --project=examples/matterhorn examples/matterhorn/matterhorn_fig6.jl run k n   # worker k of n (k = 0 … n-1)
 #   julia --project=examples/matterhorn examples/matterhorn/matterhorn_fig6.jl plot
@@ -35,15 +35,18 @@ if length(ARGS) >= 1 && ARGS[1] == "plot"
         j(q) = clamp(searchsortedlast(f, q), 1, length(f) - 1)
         return [S[j(q)] + (S[j(q)+1] - S[j(q)]) * (q - f[j(q)]) / (f[2] - f[1]) for q in fg], o
     end
-    pgv(r) = maximum(abs, spec(r, 1, summit)[2])                 # horizontal PGV at the summit (Ormsby source)
-    P5 = pgv(r0)
-    red(m) = 100 * (1 - pgv(R[m]) / P5)                          # amplitude reduction [%]
+    # amplitude reduction: of the fundamental resonance peak (0.25-0.6 Hz) of the horizontal summit spectrum, relative to
+    # model 5 (as the peaks of the paper's Fig. 6B: model 1 -29 %). (The reduction of the summit PGV instead is not monotonic
+    # in the thickness: interference in the time domain.)
+    fpk(r) = maximum(spec(r, 1, summit)[1][0.25 .<= fg .<= 0.6])
+    P5 = fpk(r0)
+    red(m) = 100 * (1 - fpk(R[m]) / P5)                          # amplitude reduction [%]
 
     fig = Figure(size=(2000, 1300), fontsize=26, backgroundcolor=:white)
     # (A) the models: vp in the upper part of the section
     mesh, model, sec = section_model(DX2, NA2)
     X, Z = mesh.x.val[:, 1, :], mesh.z.val[:, 1, :]
-    I = findall(x -> -1.4 <= x <= 1.5, X[:, end]); K = findfirst(k -> minimum(Z[I, k]) >= 2.6, axes(Z, 2)):size(Z, 2)
+    I = findall(x -> -1.4 <= x <= 1.5, X[:, end]); K = findfirst(k -> maximum(Z[I, k]) >= 2.0, axes(Z, 2)):size(Z, 2)
     nI, nK = length(I), length(K)
     verts = [vec(X[I, K]) vec(Z[I, K])]
     idx(i, k) = (k - 1) * nI + i
@@ -58,14 +61,14 @@ if length(ARGS) >= 1 && ARGS[1] == "plot"
         ax = Axis(gA[1, q], aspect=DataAspect()); hidedecorations!(ax); hidespines!(ax)
         mA = mesh!(ax, verts, faces, color=1e3 .* vec(m.fields.vp[I, 1, K]), colormap=Reverse(:PuBuGn_9), colorrange=(3000, 5000),
                    shading=NoShading)
-        text!(ax, 0.05, 2.75, text=names[q], align=(:center, :center), color=:white, fontsize=22, font=:italic)
-        ylims!(ax, 2.6, 4.45)
+        text!(ax, 0.05, 2.8, text=names[q], align=(:center, :center), color=:white, fontsize=22, font=:italic)
+        limits!(ax, -1.4, 1.5, 2.55, 4.45)
     end
     Colorbar(gA[1, 6], mA, label="Vp (m/s)", height=Relative(0.6), ticks=3000:500:5000)
     Label(gA[1, 1, TopLeft()], "(A)", fontsize=30, halign=:left)
     # (B) spectra at the summit (models 1-5) and in the valley
     gB = fig[2, 1] = GridLayout()
-    axh = Axis(gB[1, 1], ylabel="Horizontal motion", title="(B)   Spectra at summit", titlealign=:left, titlesize=30)
+    axh = Axis(gB[1, 1], ylabel="Horizontal motion", title="(B)   Spectra at summit", titlealign=:left, titlesize=30, yticks=0.2:0.2:1.0)
     axv = Axis(gB[2, 1], ylabel="Vertical motion", xlabel="Frequency (Hz)")
     S5 = spec(r0, 1, summit)[1]; nrm = maximum(S5)
     labs = ["Complete permafrost body", "High amount", "Moderate amount", "Small amount", "No permafrost body"]
@@ -78,7 +81,7 @@ if length(ARGS) >= 1 && ARGS[1] == "plot"
     for ax in (axh, axv); xlims!(ax, 0, 4); end
     ylims!(axh, 0, 1.1); ylims!(axv, 0, 0.5); hidexdecorations!(axh, grid=false); rowgap!(gB, 0)
     rowsize!(gB, 2, Relative(0.4))
-    axislegend(axh, position=:rt, framevisible=true)
+    axislegend(axh, position=:rt, framevisible=true, labelsize=18, rowgap=-4, padding=(6, 6, 2, 2))
     # (C) amplitude reduction over thickness and velocity increase (bilinear between the 6 × 5 models)
     th, fv = collect(THICK), collect(FV)
     Rd = [red((round(t, digits=2), round(f, digits=2))) for t in th, f in fv]
@@ -91,13 +94,18 @@ if length(ARGS) >= 1 && ARGS[1] == "plot"
     F = [bil(t, f) for t in tf, f in ff]
     axc = Axis(fig[2, 2], xlabel="Permafrost thickness below summit (m)", ylabel="Seismic velocity increase\ndue to permafrost (%)",
                title="(C)   Amplitude reduction sensitivity", titlealign=:left, titlesize=30)
-    hm = heatmap!(axc, 1e3 .* tf, 100 .* (ff .- 1), F, colormap=:tokyo, colorrange=(0, max(30, maximum(F))))
+    # (the paper's colour map, sampled from its colour bar: a cubehelix from dark purple over brown and olive to lavender)
+    CH = cgrad([colorant"#2e1030", colorant"#45172c", colorant"#531b1f", colorant"#642212", colorant"#723104",
+                colorant"#744500", colorant"#745603", colorant"#70671a", colorant"#6b763a", colorant"#65845c",
+                colorant"#60917b", colorant"#649f9b", colorant"#7cacb7", colorant"#9bb9cf", colorant"#b8c5e5"])
+    hm = heatmap!(axc, 1e3 .* tf, 100 .* (ff .- 1), F, colormap=CH, colorrange=(0, max(30, maximum(F))))
     contour!(axc, 1e3 .* tf, 100 .* (ff .- 1), F, levels=5:5:50, color=:black, linestyle=:dash, linewidth=1.5)
     Colorbar(fig[2, 3], hm, label="Amplitude reduction (%)")
+    rowsize!(fig.layout, 1, Relative(0.3))
     ours = joinpath(@__DIR__, "matterhorn_fig6_40m.png")
     save(ours, fig)
     println("saved $ours")
-    @printf("Fig. 6C (40 m): amplitude reduction of the summit horizontal PGV (Ormsby source) [%%], thickness (rows) × velocity +10…50 %% (columns)\n")
+    @printf("Fig. 6C (40 m): reduction of the fundamental peak (0.25-0.6 Hz) of the summit horizontal spectrum [%%], thickness (rows) × velocity +10…50 %% (columns)\n")
     for (i, t) in enumerate(th); @printf("  %4.0f m: %s\n", 1e3t, join((@sprintf("%5.1f", v) for v in Rd[i, :]), " ")); end
     @printf("models 1-4 (vs model 5): %s %%\n", join((@sprintf("%.1f", red(m)) for m in MODELS15[1:4]), ", "))
     paper = joinpath(PRIVATE, "paper_figs", "fig6.png")
@@ -105,7 +113,8 @@ if length(ARGS) >= 1 && ARGS[1] == "plot"
         notes = wrap("Ours: 2D N-S section, curvilinear SBP-SAT, 40 m nodes, vertical P + 1.7 SV plane waves, Ormsby source " *
                      "(0.3-3.5 Hz); permafrost velocities × (1 + increase), density × 1.1, thickness below the summit thinning to 0 " *
                      "at 2.9 km (the paper shows the bodies only as a sketch: models 2-4 are 450, 300, 150 m, our choice). " *
-                     "Amplitude reduction: 1 - PGV/PGV(model 5) of the horizontal motion at the summit. Spectra normalized to the " *
+                     "Amplitude reduction: of the fundamental peak (0.25-0.6 Hz) of the horizontal summit spectrum relative to model 5 (the " *
+                     "paper does not define it; its Fig. 6B gives -29 % for model 1, ours -33 %). Spectra normalized to the " *
                      "maximum of model 5, smoothed over ±0.05 Hz.")
         file = compare_page(paper, ours, "compare_fig6.png"; top="Limberger et al. (2025), Fig. 6 (Salvus)",
                             bottom="SeismicWavePC, curvilinear SBP, 40 m grid", notes)
