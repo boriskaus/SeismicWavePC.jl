@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- LaunchAgent for julia_memguard.sh (see the install notes there). Expects the script in ~/bin. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.user.julia-memguard</string>
+    <key>ProgramArguments</key>
+    <array><string>/bin/bash</string><string>-c</string><string>exec /bin/bash "$HOME/bin/julia_memguard.sh"</string></array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ProcessType</key><string>Background</string>
+</dict>
+</plist>
