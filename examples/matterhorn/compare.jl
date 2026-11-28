@@ -2,6 +2,10 @@
 # CC BY 4.0 attribution of the paper's figure and notes at the bottom. Used by the figure scripts of this example.
 using CairoMakie, GeophysicalModelGenerator
 
+# The pages contain the paper's figures: they are written to examples/data/comparisons (git-ignored), never into the
+# repository, which holds only our own material (an open package).
+const COMPARE_DIR = joinpath(@__DIR__, "..", "data", "comparisons")
+
 const ATTRIBUTION = "Top: Limberger, Rümpker, Kruse & Duretz (2025), Sci. Rep. 15, 23914, doi:10.1038/s41598-025-08218-5, CC BY 4.0" *
                     " (cropped to the Matterhorn panels where marked)."
 
@@ -10,9 +14,10 @@ const ATTRIBUTION = "Top: Limberger, Rümpker, Kruse & Duretz (2025), Sci. Rep. 
 
 Stack the image file `paper` (optionally cropped: `crop = (rows, columns)` in its pixels) above the image file `ours`, both
 scaled to `width` pixels, with the headers `top` and `bottom`, the attribution and `notes` (one line each, wrapped by the
-caller) below. Saves `file`.
+caller) below. Saves `file` (its name) in `COMPARE_DIR`.
 """
 function compare_page(paper, ours, file; top, bottom, notes=String[], width=2000, crop=nothing)
+    file = joinpath(mkpath(COMPARE_DIR), basename(file))
     P = load(paper)
     crop === nothing || (P = P[crop...])
     O = load(ours)

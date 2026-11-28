@@ -93,7 +93,7 @@ const NOTES = wrap("Resolution. Paper (Salvus, spectral elements of order 4): â‰
     "relative polarity is not stated in the paper).")
 if PAPER !== nothing
     file = joinpath(@__DIR__, "compare_fig7$(ANGLE_AT == "z0" ? "" : "_halfspace")$(ROLE == "main" ? "" : "_opposite").png")
-    compare_page(PAPER, ours, file; top="Limberger et al. (2025), Fig. 7 (Salvus)",
+    file = compare_page(PAPER, ours, file; top="Limberger et al. (2025), Fig. 7 (Salvus)",
                  bottom="SeismicWavePC, curvilinear SBP, $(round(Int, 1e3DX7)) m grid", notes=NOTES)
     println("saved $file")
 end

@@ -86,7 +86,11 @@ the columns sample the sharp DEM differently. Smoothed over a fixed σ = 100 m (
 instead of 4.48 km), the model no longer changes with the grid:
 
 
-![Fig. 7: the paper (left) and SeismicWavePC (right)](matterhorn_fig7_comparison.png)
+![Fig. 7 in the paper's layout and colour maps (SeismicWavePC, 40 m)](matterhorn_fig7_paperstyle_40m.png)
+
+(The comparison pages with the paper's figures on top are made locally by the figure scripts, e.g.
+`fig7_paper_style.jl 0.04 ../data/paper_figs/fig7.png`, into `examples/data/comparisons/`; they are not part of the
+repository, which contains only our own material.)
 
 Surface dQ, scenario A (summit horizontal PGV 1 cm/s; scenario B: × 30), maxima by flank and height band [kPa]
 (40 m grid; 30 m in brackets, a convergence check):
