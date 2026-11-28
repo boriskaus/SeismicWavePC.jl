@@ -3,8 +3,11 @@
 # machine panicked after four Julia jobs reached ~170 GB on 64 GB).
 #   run_guarded.sh <limit_GB> <logfile> <command...>
 # Every second: resident memory (ps, fast); every ~5 s also the footprint incl. compressed pages (top, slower; ps misses
-# compressed pages). The larger value is compared with the limit and appended to <logfile>.mem.
+# compressed pages). The larger value is compared with the limit and appended to <logfile>.mem. The job is also stopped
+# when the whole machine runs low (kern.memorystatus_level, free memory in %, below MIN_FREE): other sessions run
+# simulations on this laptop too, and a stopped job can be rerun, a kernel panic loses everything.
 limit_kb=$(( $1 * 1024 * 1024 )); log=$2; shift 2
+MIN_FREE=${MIN_FREE:-15}
 "$@" > "$log" 2>&1 &
 pid=$!
 peak=0; foot=0; n=0
@@ -18,9 +21,10 @@ while kill -0 $pid 2>/dev/null; do
     fi
     mem=$(( rss > foot ? rss : foot ))
     (( mem > peak )) && peak=$mem
-    echo "$(date +%H:%M:%S) $(( mem / 1024 )) MB" >> "$log.mem"
-    if (( mem >= limit_kb )); then
-        echo "run_guarded: memory $(( mem / 1024 )) MB >= limit, killing $pid" | tee -a "$log"
+    free=$(sysctl -n kern.memorystatus_level)
+    echo "$(date +%H:%M:%S) $(( mem / 1024 )) MB (system free ${free}%)" >> "$log.mem"
+    if (( mem >= limit_kb || free < MIN_FREE )); then
+        echo "run_guarded: memory $(( mem / 1024 )) MB (limit $(( limit_kb / 1048576 )) GB), system free ${free}% (min ${MIN_FREE}%): killing $pid" | tee -a "$log"
         kill $procs 2>/dev/null; sleep 2; kill -9 $procs 2>/dev/null
         exit 99
     fi
