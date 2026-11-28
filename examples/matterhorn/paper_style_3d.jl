@@ -9,6 +9,7 @@
 using SeismicWavePC, GeophysicalModelGenerator, CairoMakie, Serialization, Printf
 include("model.jl")
 include("compare.jl")
+include("relief.jl")
 const TAG = length(ARGS) >= 1 ? ARGS[1] : "60m"
 load3d(name) = deserialize(joinpath(@__DIR__, "..", "data", "matterhorn3d_$(name)_$(TAG).jls"))
 runs = Dict(n => load3d(n) for n in ("P", "S_NS", "S_EW"))
@@ -109,16 +110,14 @@ page(joinpath(PRIVATE, "paper_figs", "fig5.png"), ours, "compare_fig5.png",
 
 # --- Fig. 2B-E: receiver lines on the DEM and record sections (each subfigure normalized to its maximum)
 fig = Figure(size=(1900, 1350), fontsize=22, backgroundcolor=:white)
-xm = range(-5, 5, length=301)
-axm = Axis(fig[1:3, 1], aspect=DataAspect(), xlabel="east (km)", ylabel="north (km)", title="(B)", titlealign=:left, titlesize=30)
-hm = heatmap!(axm, xm, xm, [1e3topo(a, b) for a in xm, b in xm], colormap=cgrad([colorant"#2f7d1f", colorant"#f6f2a0",
-               colorant"#e8b54a", colorant"#8a5426", colorant"#f4f0ec"], [0, 0.3, 0.55, 0.85, 1]), colorrange=(1700, 4300))
+axm, crm = relief_map!(fig[1:3, 1])                              # (shaded relief, raw 10 m DEM; relief.jl)
+axm.title = "(B)"; axm.titlealign = :left; axm.titlesize = 30
 ns, ew = [k for k in eachindex(d.names) if startswith(d.names[k], "NS")], [k for k in eachindex(d.names) if startswith(d.names[k], "EW")]
-scatter!(axm, d.x[ns], d.y[ns], color=:blue, markersize=6, label="Receiver line NS")
-scatter!(axm, d.x[ew], d.y[ew], color=:red, markersize=6, label="Receiver line EW")
+scatter!(axm, d.x[ns], d.y[ns], color=:blue, markersize=8, label="Receiver line NS")
+scatter!(axm, d.x[ew], d.y[ew], color=:red, markersize=8, label="Receiver line EW")
 scatter!(axm, [0.0], [0.0], marker=:circle, color=:transparent, strokecolor=:black, strokewidth=2, markersize=22)
 scatter!(axm, [0.0], [-2.5], marker=:rect, color=:transparent, strokecolor=:black, strokewidth=2, markersize=16)
-axislegend(axm, position=:rt); Colorbar(fig[1:3, 2], hm, label="Elevation (m)", height=Relative(0.5))
+axislegend(axm, position=:rt); Colorbar(fig[1:3, 2], colormap=RELIEF_CMAP, colorrange=crm, label="Elevation (m)", height=Relative(0.45))
 for (j, (sel, pos, col, ends)) in enumerate(((ns, d.y, :blue, ("S", "N")), (ew, d.x, :red, ("W", "E"))))
     o = sortperm(pos[sel]); sel = sel[o]
     for c in 1:3
@@ -135,6 +134,7 @@ for (j, (sel, pos, col, ends)) in enumerate(((ns, d.y, :blue, ("S", "N")), (ew, 
     end
 end
 for (c, l) in enumerate(("(C)", "(D)", "(E)")); Label(fig[c, 3, TopLeft()], l, fontsize=30); end
+colsize!(fig.layout, 1, Relative(0.4))                           # (the map as large as the record sections allow)
 ours = joinpath(@__DIR__, "matterhorn_fig2_$TAG.png"); save(ours, fig); println("saved $ours")
 page(joinpath(PRIVATE, "paper_figs", "fig2.png"), ours, "compare_fig2.png",
      "Paper's panel A is a Google Earth view (not reproduced). Ours: receivers every 100 m along the N-S and W-E lines " *
