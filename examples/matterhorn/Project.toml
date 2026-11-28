@@ -1,0 +1,9 @@
+[deps]
+ArchGDAL = "c9ce4bd3-c3d5-55b8-8973-c0e20141b8c3"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+GeophysicalModelGenerator = "3700c31b-fa53-48a6-808a-ef22d5a84742"
+Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
+SeismicWavePC = "2a62f5b1-65eb-4f43-9ac1-72d262d189d8"
+
+[sources]
+SeismicWavePC = {path = "../.."}
