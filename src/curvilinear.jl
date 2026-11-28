@@ -232,7 +232,7 @@ const CV_RECORD = (CV_VEL..., CV_STRESS..., :lam, :mu, :mu66)                   
 const CV_FORCE = (CV_VEL..., :iρJ)                                                  # (forces)
 const CV_METRIC = (:J, :Jx, :Jy, :hξ, :hψ, :hη, :ox, :oy)
 const CV_TF = (CV_FORCE..., CV_METRIC...)                                           # (teleseismic momentum)
-const CV_UPDATE = (CV_STRESS..., CV_METRIC..., :V1, :lam, :mu, :mu66, :tp, :ts, :wx, :wz, :s13,
+const CV_UPDATE = (CV_STRESS..., CV_METRIC..., :V1, :lam, :mu, :mu66, :tp, :ts, :wx, :wz, :s13, :tilt, :azim,
                    :R11, :R22, :R33, :R23, :R13, :R12, :R1, :R2)                    # (the stress update: teleseismic stress)
 
 "The arrays of a neighbouring block that the interface terms read (small kernel arguments: Metal allows 4 kB)."
@@ -525,12 +525,23 @@ end
     (; S1, S2, J, Jx, mu, mu66) = B
     I = CartesianIndex(i, k)
     exy, eyz = c + Jx[I] / J[I] * e, e / J[I]
+    d1, d2 = sh_increment(tilted(B), B, vc, dt, I, exy, eyz)
+    S1[I] += d1
+    S2[I] += d2
+end
+"The SH stress increments (σxy, σyz)·dt: σxy with C66, σyz with C44, in the frame of the symmetry axis if tilted (TTI)."
+@inline Base.@propagate_inbounds function sh_increment(::Val{false}, B, vc, dt, I, exy, eyz)
     ts = orzero(B.ts, I)
     ts1 = unrelaxed(ts, vc)
-    R1 = cmemvar!(memory(B, Val(:R1)), I, mu66[I] * ts * exy, vc, dt)
-    R2 = cmemvar!(memory(B, Val(:R2)), I, mu[I] * ts * eyz, vc, dt)
-    S1[I] += (mu66[I] * ts1 * exy + R1) * dt
-    S2[I] += (mu[I] * ts1 * eyz + R2) * dt
+    m6, m = B.mu66[I], B.mu[I]
+    R1 = cmemvar!(memory(B, Val(:R1)), I, m6 * ts * exy, vc, dt)
+    R2 = cmemvar!(memory(B, Val(:R2)), I, m * ts * eyz, vc, dt)
+    return ((m6 * ts1 * exy + R1) * dt, (m * ts1 * eyz + R2) * dt)
+end
+@inline Base.@propagate_inbounds function sh_increment(::Val{true}, B, vc, dt, I, exy, eyz)
+    s, c = sincos(B.tilt[I])                     # (the shear strains (x'y, z'y) rotate as a vector in the x-z plane)
+    d1, d2 = sh_increment(Val(false), B, vc, dt, I, c * exy - s * eyz, s * exy + c * eyz)
+    return (c * d1 + s * d2, c * d2 - s * d1)
 end
 "Sources of SH: forces fy on vy, moment tensors (Mxy, Myz) on (σxy, σyz)."
 Base.@propagate_inbounds function force_sh_cv!(blocks, S, it, dt, u)
@@ -588,7 +599,14 @@ end
 end
 # VTI (anisotropy.jl): normal stresses w (w·e) relaxing with τp and the rest (s13) with τs; σxz with C55 (`mu`)
 @inline Base.@propagate_inbounds function stress_update_cv!(::Val{true}, B, vc, dt, I, exx, ezz, exz)
-    (; S11, S22, S12, wx, wz, s13, mu) = B
+    d = vti_increment_cv(tilted(B), B, vc, dt, I, exx, ezz, exz)
+    B.S11[I] += d[1]
+    B.S22[I] += d[2]
+    B.S12[I] += d[3]
+end
+"The VTI stress increments (σxx, σzz, σxz)·dt; tilted (TTI): in the frame of the symmetry axis (anisotropy.jl)."
+@inline Base.@propagate_inbounds function vti_increment_cv(::Val{false}, B, vc, dt, I, exx, ezz, exz)
+    (; wx, wz, s13, mu) = B
     tp, ts = orzero(B.tp, I), orzero(B.ts, I)
     tp1, ts1 = unrelaxed(tp, vc), unrelaxed(ts, vc)
     w1, w3, s = wx[I], wz[I], s13[I]
@@ -596,9 +614,13 @@ end
     Rx = cmemvar!(memory(B, Val(:R11)), I, w1 * pe * tp + s * ts * ezz, vc, dt)
     Rz = cmemvar!(memory(B, Val(:R22)), I, w3 * pe * tp + s * ts * exx, vc, dt)
     Rxz = cmemvar!(memory(B, Val(:R12)), I, mu[I] * ts * exz, vc, dt)
-    S11[I] += (w1 * pe * tp1 + s * ts1 * ezz + Rx) * dt
-    S22[I] += (w3 * pe * tp1 + s * ts1 * exx + Rz) * dt
-    S12[I] += (mu[I] * ts1 * exz + Rxz) * dt
+    return ((w1 * pe * tp1 + s * ts1 * ezz + Rx) * dt, (w3 * pe * tp1 + s * ts1 * exx + Rz) * dt, (mu[I] * ts1 * exz + Rxz) * dt)
+end
+@inline Base.@propagate_inbounds function vti_increment_cv(::Val{true}, B, vc, dt, I, exx, ezz, exz)
+    s, c = sincos(B.tilt[I])
+    a, b, h = rot2(c, s, exx, ezz, exz / 2)                  # the strain rate in the frame of the axis (exz: engineering)
+    d = vti_increment_cv(Val(false), B, vc, dt, I, a, b, 2h)
+    return rot2(c, -s, d[1], d[2], d[3])
 end
 
 # Sources (lists of the nodes they reach: block, node, weight, source; sorted by node, `seg[u]:seg[u+1]-1` the entries of
@@ -816,6 +838,10 @@ function simulate_curvilinear(model::Union{CartData,DistributedModel}; dt=nothin
     aniso = has_anisotropy(model)                               # VTI: Thomsen ε, δ, γ
     thomsen(k) = haskey(f, k) ? Float64.(f[k]) : zeros(nw, nzt)
     ε, δ, γ = thomsen(:epsilon), thomsen(:delta), thomsen(:gamma)
+    tti = haskey(f, :tilt)                                      # TTI: the symmetry axis tilted in the x-z plane
+    haskey(f, :azimuth) && error("2D: the symmetry axis tilts in the x-z plane; give a signed `tilt` (positive towards +x), no `azimuth`")
+    tti && !aniso && error("the DistributedModel returns a `tilt`: create it with `anisotropy = true`")
+    θ = tti ? deg2rad.(Float64.(f.tilt)) : zeros(nw, nzt)
     ts = relaxation_times(fq_min, fq_max)
     zeta = constq_zeta(fq_min, fq_max, ts)
     # blocks: split at the interfaces; at an interface row each block takes the material of its side
@@ -826,7 +852,7 @@ function simulate_curvilinear(model::Union{CartData,DistributedModel}; dt=nothin
     Hξ = sbp_weights(nx, hξ)
     hostblocks = map(1:length(edges)-1) do b
         r = edges[b]:edges[b+1]
-        m = map(A -> copy(A[:, r]), (ρ, vp, vs, qp, qs, ε, δ, γ))
+        m = map(A -> copy(A[:, r]), (ρ, vp, vs, qp, qs, ε, δ, γ, θ))
         kmap = [r[k] for i in 1:nw, k in eachindex(r)]       # the model row of the material of each node (gradients)
         for (j, side, src) in ((b - 1, false, 2), (b, true, length(r) - 1))
             1 <= j <= length(rows) || continue
@@ -837,7 +863,7 @@ function simulate_curvilinear(model::Union{CartData,DistributedModel}; dt=nothin
                 kmap[i, kk] = kmap[i, src]
             end
         end
-        bρ, bvp, bvs, bqp, bqs, bε, bδ, bγ = m
+        bρ, bvp, bvs, bqp, bqs, bε, bδ, bγ, bθ = m
         nz = length(r)
         _, hη = sbp_grid(0.0, 1.0, nz)
         Zb = Zm[:, r]
@@ -882,7 +908,7 @@ function simulate_curvilinear(model::Union{CartData,DistributedModel}; dt=nothin
                 da[1][2][:, 1] .+= q; da[2][1][:, 1] .+= q
             end
         end
-        (; nz, hη, Z=Zb, J, Jx, ρ=bρ, lam, mu, taup, taus, a1, a2, vp=bvp, vs=bvs, ε=bε, δ=bδ, γ=bγ, wx, wz, s13, mu55, mu66, kmap, da,
+        (; nz, hη, Z=Zb, J, Jx, ρ=bρ, lam, mu, taup, taus, a1, a2, vp=bvp, vs=bvs, ε=bε, δ=bδ, γ=bγ, wx, wz, s13, mu55, mu66, θ=bθ, kmap, da,
          fluid=block_fluid(bvs[ia-ow:ib-ow, :], b, par))
     end
     nb = length(hostblocks)
@@ -909,15 +935,16 @@ function simulate_curvilinear(model::Union{CartData,DistributedModel}; dt=nothin
         mem = attenuation ? (; R11=KernelAbstractions.zeros(backend, FT, NM, nl, H.nz), R22=KernelAbstractions.zeros(backend, FT, NM, nl, H.nz),
                                R12=KernelAbstractions.zeros(backend, FT, NM, nl, H.nz)) : (;)
         vti = aniso ? (; wx=loc(H.wx), wz=loc(H.wz), s13=loc(H.s13)) : (;)
+        tiltf = tti ? (; tilt=loc(H.θ)) : (;)
         r0 = H.kmap[1, 2] - 2                                       # (the mesh row of node k: r0 + k)
         sponge = absorber === :cerjan ? (; gs=loc([cerjan_factor(i + ow, nx, na) * cerjan_factor(r0 + k, typemax(Int), na) for i in 1:nw, k in 1:H.nz])) : (;)
         sh && return merge((; V1=z(), S1=z(), S2=z(), J=loc(H.J), Jx=loc(H.Jx), iρJ=loc(1 ./ (H.ρ .* H.J)), mu=loc(H.mu55), mu66=loc(H.mu66),
-                            ts=attenuation ? loc(H.taus) : nothing, a1=loc(H.a1), hξ=FT(hξ), hη=FT(H.hη), ox, nxg=nx, fluid=H.fluid),
+                            ts=attenuation ? loc(H.taus) : nothing, a1=loc(H.a1), hξ=FT(hξ), hη=FT(H.hη), ox, nxg=nx, fluid=H.fluid), tiltf,
                            attenuation ? (; R1=KernelAbstractions.zeros(backend, FT, NM, nl, H.nz), R2=KernelAbstractions.zeros(backend, FT, NM, nl, H.nz)) : (;),
                            sponge, player)
         merge((; V1=z(), V2=z(), S11=z(), S22=z(), S12=z(), J=loc(H.J), Jx=loc(H.Jx), iρJ=loc(1 ./ (H.ρ .* H.J)), lam=loc(H.lam),
                mu=loc(aniso ? H.mu55 : H.mu), tp=attenuation ? loc(H.taup) : nothing, ts=attenuation ? loc(H.taus) : nothing, a1=loc(H.a1),
-               a2=loc(H.a2), hξ=FT(hξ), hη=FT(H.hη), ox, nxg=nx, fluid=H.fluid), mem, vti, sponge, player)
+               a2=loc(H.a2), hξ=FT(hξ), hη=FT(H.hη), ox, nxg=nx, fluid=H.fluid), mem, vti, tiltf, sponge, player)
     end)
     lite = map(B -> merge(B, (; pml=nothing)), blocks)        # (kernels without the PML: Metal allows 4 kB of arguments)
     # (kernels that see all blocks: only the arrays they read)

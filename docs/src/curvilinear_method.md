@@ -8,7 +8,8 @@ waves. How to use the solver: [Topography on a curvilinear grid](@ref).
 ## The scheme
 
 - **Equations.** The first-order velocity–stress form of the visco-elastic wave equation (generalized Zener body and VTI
-  anisotropy as in the staggered solver), transformed to a terrain-following mesh with vertical columns: x = ξ (and y = ψ),
+  anisotropy as in the staggered solver; TTI by rotating the strain rate into the frame of the tilted axis and the stress
+  back), transformed to a terrain-following mesh with vertical columns: x = ξ (and y = ψ),
   z = Z(ξ, η). With J = ∂Z/∂η and Jx = −∂Z/∂ξ the momentum equation is ρJ ∂t vᵢ = Dξ(J σᵢₓ) + Dη(Jx σᵢₓ + σᵢ_z), and the
   strain rates use ∂x = Dξ + (Jx/J) Dη, ∂z = Dη / J (3D: the same with ψ and Jy).
 - **SBP operators.** Upwind *dual-pairing* operators D₊, D₋ with H D₊ + (H D₋)ᵀ = B (Mattsson, 2017), with the

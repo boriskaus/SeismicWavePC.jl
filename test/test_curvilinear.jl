@@ -636,6 +636,57 @@ cvpart(k) = !isdefined(Main, :TEST_PARTS) || isempty(Main.TEST_PARTS[]) || strin
         M = simulate(addfield(mesh, merge(base, (; vs=base.vs .- 1e-3 .* δv))); kw..., stations=sts, verbose=false)
         @test maximum(abs, δd.v .- (P.v .- M.v) ./ 2e-3) < 1e-6 * maximum(abs, δd.v)
     end
+    cvpart(2) && @testset "TTI: tilt 0 = VTI, tilt 90° = VTI with the axes swapped (2D P-SV, SH, 3D), guards" begin
+        # a homogeneous medium, source and receivers on nodes, equal spacing in all directions, before any boundary wave:
+        # tilting the axis to x (y) equals VTI with x (y) and z swapped (the interior stencils are the same in all directions)
+        th = (; rho=2500.0, vp=4.0, vs=2.3, epsilon=0.25, delta=0.1, gamma=0.2, Qp=80.0, Qs=40.0)
+        rel(a, b) = maximum(abs, a - b) / maximum(abs, b)
+        n, L = 61, 6.0
+        mesh = curvilinear_mesh(range(-L, L, length=n), [x -> 0.0]; dz=2L / (n - 1), bottom=-2L)
+        X, Z = mesh.x.val[:, 1, :], mesh.z.val[:, 1, :]
+        x0, z0, h = X[31, 31], Z[31, 31], X[32, 31] - X[31, 31]
+        @test Z[31, 32] - z0 ≈ h
+        o = ones(size(mesh.x.val))
+        med(; kw...) = addfield(mesh, map(v -> v .* o, merge(th, values(kw))))
+        offs = [(a, b) for a in (-4, 0, 3) for b in (-3, 0, 4) if (a, b) != (0, 0)]
+        st(swap) = [Station("r$j", x0 + (swap ? b : a) * h, 0.0, z0 + (swap ? a : b) * h) for (j, (a, b)) in enumerate(offs)]
+        run(m, f, sts; wave=:psv) = simulate(m; grid=:curvilinear, wave, dt=0.01, tmax=1.2, T=Float64, verbose=false, stations=sts,
+                                             sources=ForceSource(x0, 0.0, z0; f..., trise=0.3, t0=0.3))
+        v = run(med(), (; fz=1e15), st(false))
+        @test run(med(tilt=0.0), (; fz=1e15), st(false)).v == v.v
+        h90 = run(med(tilt=90.0), (; fx=1e15), st(true))
+        @test rel(h90.v[:, 1, :], v.v[:, 2, :]) < 1e-6 && rel(h90.v[:, 2, :], v.v[:, 1, :]) < 1e-6
+        t30 = run(med(tilt=30.0), (; fz=1e15), st(false))
+        @test rel(t30.v, v.v) > 0.1                                                    # (the tilt matters)
+        sv = run(med(), (; fy=1e15), st(false); wave=:sh)
+        @test run(med(tilt=0.0), (; fy=1e15), st(false); wave=:sh).v == sv.v
+        @test rel(run(med(tilt=90.0), (; fy=1e15), st(true); wave=:sh).v, sv.v) < 1e-6
+        @test_throws ErrorException simulate(med(azimuth=10.0); grid=:curvilinear, tmax=0.1, verbose=false, sources=ForceSource(x0, 0.0, z0; fz=1.0))
+        # 3D: axis along x (tilt 90°, azimuth 0) and along y (azimuth 90°)
+        n3, L3 = 31, 3.0
+        mesh3 = curvilinear_mesh(range(-L3, L3, length=n3), range(-L3, L3, length=n3), [(x, y) -> 0.0]; dz=2L3 / (n3 - 1), bottom=-2L3)
+        X3, Z3 = mesh3.x.val, mesh3.z.val
+        p0, h3 = (X3[16, 16, 16], mesh3.y.val[16, 16, 16], Z3[16, 16, 16]), X3[17, 16, 16] - X3[16, 16, 16]
+        o3 = ones(size(X3))
+        med3(; kw...) = addfield(mesh3, map(v -> v .* o3, merge(th, values(kw))))
+        d3 = [(2, -1, 3), (-3, 2, 1), (1, 3, -2), (0, 0, 3), (3, 0, 0)]
+        st3(p) = [Station("r$j", (p0 .+ h3 .* d[collect(p)])...) for (j, d) in enumerate(d3)]
+        run3(m, f, sts) = simulate(m; grid=:curvilinear, dt=0.02, tmax=0.9, T=Float64, verbose=false, stations=sts,
+                                   sources=ForceSource(p0...; f..., trise=0.3, t0=0.3))
+        v3 = run3(med3(), (; fz=1e15), st3((1, 2, 3)))
+        @test rel(run3(med3(tilt=0.0, azimuth=37.0), (; fz=1e15), st3((1, 2, 3))).v, v3.v) < 1e-12   # (a rotation within the isotropy plane)
+        hx = run3(med3(tilt=90.0, azimuth=0.0), (; fx=1e15), st3((3, 2, 1)))        # x <-> z
+        @test rel(hx.v[:, [3, 2, 1], :], v3.v) < 1e-4                                 # (small domain: tails of boundary waves)
+        hy = run3(med3(tilt=90.0, azimuth=90.0), (; fy=1e15), st3((1, 3, 2)))       # y <-> z
+        @test rel(hy.v[:, [1, 3, 2], :], v3.v) < 1e-4
+        @test rel(run3(med3(tilt=40.0, azimuth=60.0), (; fz=1e15), st3((1, 2, 3))).v, v3.v) > 0.1
+        # guards: the staggered solver, gradients and Born
+        flat = CartData(xyz_grid(-1:0.5:1, 0, -1:0.5:0))
+        sm = addfield(flat, map(v -> v .* ones(size(flat.x.val)), merge(th, (; tilt=10.0))))
+        @test_throws ErrorException simulate(sm; dt=0.01, nt=2, verbose=false, sources=ForceSource(0.0, 0.0, -0.5; fz=1.0))
+        @test_throws ErrorException born(med(tilt=10.0), med(); tmax=0.1, sources=ForceSource(x0, 0.0, z0; fz=1.0))
+    end
+
     cvpart(1) && @testset "teleseismic waves (TF/SF injection): exact background, gradient" begin
         # a layer over a half-space: inside the box the total field is the background (exact, layered), outside nothing
         Lb = SW.Layers([0.0, 3000.0], [2400.0, 2800.0], [2400 * (4000.0^2 - 2 * 2300.0^2), 2800 * (6000.0^2 - 2 * 3400.0^2)],

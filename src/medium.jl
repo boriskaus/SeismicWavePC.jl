@@ -129,6 +129,7 @@ function model_block(model::DistributedModel, S::NTuple{M,UnitRange{Int}}, ::Val
         name in (:Qp, :Qs) || error("a DistributedModel must return the fields `rho`, `vp` and `vs` (and optionally `Qp`, `Qs`)")
         return fill(Inf, sz)
     end
+    any(f -> haskey(fields, f), (:tilt, :azimuth)) && error("a tilted symmetry axis (TTI) needs a curvilinear DistributedModel")
     !aniso && any(f -> haskey(fields, f), (:epsilon, :delta, :gamma)) &&
         error("the DistributedModel returns Thomsen parameters: create it with `anisotropy = true`")
     rho = field(:rho)

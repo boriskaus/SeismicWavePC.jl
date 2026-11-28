@@ -42,6 +42,7 @@ Base.:<(a::Tan, b::Tan) = a.v < b.v
 Base.:<=(a::Tan, b::Tan) = a.v <= b.v
 Base.isfinite(a::Tan) = isfinite(a.v) && isfinite(a.d)
 @inline Base.sqrt(a::Tan) = (r = sqrt(a.v); Tan(r, ifelse(r > 0, a.d / 2r, zero(r))))     # 0 at 0 (air)
+@inline Base.sincos(a::Tan) = ((s, c) = sincos(a.v); (Tan(s, c * a.d), Tan(c, -s * a.d)))         # (TTI: the tilt)
 value(x::Tan) = x.v
 value(x::Real) = x
 tangent(x::Tan) = x.d
@@ -80,8 +81,10 @@ function born(model::CartData, δm::CartData; T::Type{<:AbstractFloat}=Float32, 
     bad = intersect(keys(kwargs), (:snapshots, :callback, :checkpoint, :restart, :driver))
     isempty(bad) || error("born does not take the keywords $(join(bad, ", "))")
     size(δm) == size(model) || error("δm must be on the grid of the model (size $(size(model)), got $(size(δm)))")
-    keys(δm.fields) ⊆ (:rho, :vp, :vs, :Qp, :Qs, :epsilon, :delta, :gamma, :z, :Z) ||    # (z, Z: the heights of curvilinear meshes)
-        error("δm may have the fields rho, vp, vs, Qp, Qs (and epsilon, delta, gamma), got $(keys(δm.fields))")
+    keys(δm.fields) ⊆ (:rho, :vp, :vs, :Qp, :Qs, :epsilon, :delta, :gamma, :tilt, :azimuth, :z, :Z) ||    # (z, Z: the heights of curvilinear meshes)
+        error("δm may have the fields rho, vp, vs, Qp, Qs (and epsilon, delta, gamma, tilt, azimuth), got $(keys(δm.fields))")
+    any(k -> haskey(δm.fields, k) && !haskey(model.fields, k), (:tilt, :azimuth)) &&
+        error("δm perturbs the tilt or azimuth of the symmetry axis: give the model these fields")
     has_anisotropy(δm) && !has_anisotropy(model) &&
         error("δm perturbs epsilon, delta or gamma: give the model these fields (zero for an isotropic background)")
     return simulate(model; kwargs..., T=Tan{T}, verbose=false, driver=BornDriver(δm))

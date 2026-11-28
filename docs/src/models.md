@@ -7,7 +7,8 @@ A model is a GMG `CartData` (coordinates in km, z up; constant spacing in x and 
 - `vp`, `vs` [km/s],
 - optionally `Qp`, `Qs` (without them the model is elastic). Q is constant between `fq_min` and `fq_max`, and the velocities
   apply at `fq_ref` (keywords of `simulate`; defaults 0.05, 5 and 1 Hz),
-- optionally `epsilon`, `delta`, `gamma`: VTI anisotropy (see below).
+- optionally `epsilon`, `delta`, `gamma`: VTI anisotropy, and on curvilinear grids `tilt`, `azimuth` [°]: a tilted
+  symmetry axis (TTI; see below).
 
 Cells with `vp = vs = 0` are air: the free surface and topography follow from them. Cells with `vs = 0` and `vp > 0` are
 water (oceans, lakes). A `CartData` of size `(nx, 1, nz)` is a 2D model (P-SV by default, `wave = :sh` for SH waves).
@@ -77,7 +78,8 @@ result = simulate(model; tmax=20.0, sources, stations)           # dt from the s
   (location, moment tensor, force, timing, source time function) as on the staggered grid. [`born`](@ref) works as on the staggered
   grid (also with attenuation, on GPUs and with MPI).
 - **Anisotropy (VTI)** as on the staggered grid (fields `epsilon`, `delta`, `gamma`; the symmetry axis stays vertical on the
-  deformed mesh), also in gradients and Born modelling.
+  deformed mesh), also in gradients and Born modelling. **Tilted axes (TTI)** with the fields `tilt` and `azimuth` (see
+  [Tilted symmetry axis (TTI)](@ref); forward simulations only).
 - **Snapshots:** ParaView files and callbacks of the whole wavefield, and netCDF planes ([`Snapshots`](@ref): the free
   surface `fs` on the topography, `xy` planes and sections resampled at regular heights; `:v`, `:u`, `:ps`, also in pieces).
 - **Checkpoints** (`checkpoint`, `checkpoint_every`, `restart`) as on the staggered grid.
@@ -112,7 +114,7 @@ model = CartData(X, Y, Z, (; rho, vp, vs, epsilon=fill(0.1, size(X)), delta=fill
 
 - The symmetry axis is the z axis of the grid: every stress needs only the strain rates at its own point, as in isotropic
   media, so the accuracy and the stability (time step: the fastest qP direction) are those of the isotropic code. Tilted
-  axes (TTI) are not supported.
+  axes (TTI): curvilinear grids only, see below.
 - **Attenuation:** the normal stiffness is split as in the isotropic scheme into a P part (`Qp`) and the rest (`Qs`), and
   stays symmetric: qP waves along the axes attenuate with `Qp`, S waves with `Qs`; isotropic media give exactly the
   isotropic scheme.
@@ -121,6 +123,39 @@ model = CartData(X, Y, Z, (; rho, vp, vs, epsilon=fill(0.1, size(X)), delta=fill
   automatic differentiation) and Born modelling. Not yet: plane waves and teleseismic waves (their incoming field assumes
   isotropic layers).
 - Models without these fields run the isotropic kernels: anisotropy costs nothing when it is not used.
+
+## Tilted symmetry axis (TTI)
+
+On curvilinear grids (`grid = :curvilinear`, also for a flat surface) the symmetry axis may tilt, node by node: dipping
+layers, foliated or fractured rock, aligned cracks in a volcano. The fields
+- `tilt` [°]: the angle θ of the axis from the vertical,
+- `azimuth` [°] (3D): the direction φ of its horizontal part, from x towards y (counter-clockwise from x seen from above),
+
+give the axis n = (sin θ cos φ, sin θ sin φ, cos θ); in 2D n = (sin θ, cos θ) in the x-z plane (a signed `tilt`, positive
+towards +x, no `azimuth`). `vp`, `vs` and the Thomsen parameters then hold along and across this axis instead of the
+vertical: qP travels with `vp` along n and with `vp √(1 + 2ε)` perpendicular to it.
+
+```julia
+# 2D: layers dipping by 30° towards +x (axis normal to the layers)
+model = addfield(mesh, (; rho, vp, vs, epsilon=fill(0.2, size(X)), delta=fill(0.05, size(X)), gamma=fill(0.1, size(X)),
+                        tilt=fill(30.0, size(X))))
+```
+
+- **The scheme.** The grid is collocated (all strain rates at every node), so the stress update rotates the strain rate
+  into the frame of the axis, applies the VTI update and rotates the stress back: σ = Aᵀ C'(A ε Aᵀ) A. The stiffness stays
+  symmetric and positive definite, so the free surface, interfaces and the energy estimate of the scheme hold as for
+  VTI. The grid stores one or two angles per node instead of 21 moduli; a 3D step costs ~10 % more than VTI (Metal).
+- **Attenuation:** the split into a `Qp` part and a `Qs` part rotates with the axis (qP along the axis attenuates with
+  `Qp`); the memory variables live in the frame of the axis.
+- **Checks** (`test_curvilinear.jl`): `tilt = 0` gives the VTI result bit for bit; an axis along x (or y) gives the VTI
+  result with the axes swapped (2D P-SV, SH and 3D, to rounding); for tilt 30° (2D) and tilt 40°, azimuth 60° (3D) the
+  rotated VTI solution is reproduced to the discretization error, which falls with the grid spacing as for VTI (2D: 1.6 %
+  → 0.3 % when the source period grows by 1.5×; 3D: 5 % → 1.4 % from 0.2 to 0.13 km). Long runs with topography, an
+  interface, attenuation and an axis varying in space decay (impedance absorber and PML).
+- **Not yet:** the staggered solver (its normal and shear stresses live at different points: TTI would need
+  interpolation), gradients and Born modelling, teleseismic waves. The impedance absorber uses the speeds of the untilted
+  axis (it absorbs a little less); CFS-PMLs can become unstable in strongly anisotropic media (a known property of
+  PMLs), so check long runs or use `absorber = :impedance`.
 
 ## Finer cells near the surface
 

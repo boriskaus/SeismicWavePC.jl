@@ -219,7 +219,24 @@ end
 end
 # VTI: σyz with C44 = C55 (`mu`), σxy with C66 (`mu66`), C12 − C11 = −2 C66
 @inline Base.@propagate_inbounds function stress3_update_cv!(::Val{true}, B, vc, dt, I, dxV1, dyV2, dzV3, eyz, exz, exy)
-    (; S11, S22, S33, S23, S13, S12, wx, wz, s13, mu, mu66) = B
+    d = vti3_increment_cv(tilted(B), B, vc, dt, I, dxV1, dyV2, dzV3, eyz, exz, exy)
+    B.S11[I] += d[1]
+    B.S22[I] += d[2]
+    B.S33[I] += d[3]
+    B.S23[I] += d[4]
+    B.S13[I] += d[5]
+    B.S12[I] += d[6]
+end
+"TTI: the VTI increments in the frame of the symmetry axis (anisotropy.jl), rotated back."
+@inline Base.@propagate_inbounds function vti3_increment_cv(::Val{true}, B, vc, dt, I, dxV1, dyV2, dzV3, eyz, exz, exy)
+    A = axis_frame(B.tilt[I], B.azim[I])
+    e = rot3(A, (dxV1, dyV2, dzV3, eyz / 2, exz / 2, exy / 2))        # (shear strain rates: engineering)
+    d = vti3_increment_cv(Val(false), B, vc, dt, I, e[1], e[2], e[3], 2e[4], 2e[5], 2e[6])
+    return rot3(transpose3(A), d)
+end
+"The VTI stress increments (σxx, σyy, σzz, σyz, σxz, σxy)·dt."
+@inline Base.@propagate_inbounds function vti3_increment_cv(::Val{false}, B, vc, dt, I, dxV1, dyV2, dzV3, eyz, exz, exy)
+    (; wx, wz, s13, mu, mu66) = B
     tp, ts = orzero(B.tp, I), orzero(B.ts, I)
     tp1, ts1 = unrelaxed(tp, vc), unrelaxed(ts, vc)
     w1, w3, s, n66 = wx[I], wz[I], s13[I], -2mu66[I]
@@ -228,16 +245,12 @@ end
     Rx = cmemvar!(memory(B, Val(:R11)), I, w1 * pe * tp + ox * ts, vc, dt)
     Ry = cmemvar!(memory(B, Val(:R22)), I, w1 * pe * tp + oy * ts, vc, dt)
     Rz = cmemvar!(memory(B, Val(:R33)), I, w3 * pe * tp + oz * ts, vc, dt)
-    S11[I] += (w1 * pe * tp1 + ox * ts1 + Rx) * dt
-    S22[I] += (w1 * pe * tp1 + oy * ts1 + Ry) * dt
-    S33[I] += (w3 * pe * tp1 + oz * ts1 + Rz) * dt
     m, m6 = mu[I], mu66[I]
     Ryz = cmemvar!(memory(B, Val(:R23)), I, m * ts * eyz, vc, dt)
     Rxz = cmemvar!(memory(B, Val(:R13)), I, m * ts * exz, vc, dt)
     Rxy = cmemvar!(memory(B, Val(:R12)), I, m6 * ts * exy, vc, dt)
-    S23[I] += (m * ts1 * eyz + Ryz) * dt
-    S13[I] += (m * ts1 * exz + Rxz) * dt
-    S12[I] += (m6 * ts1 * exy + Rxy) * dt
+    return ((w1 * pe * tp1 + ox * ts1 + Rx) * dt, (w1 * pe * tp1 + oy * ts1 + Ry) * dt, (w3 * pe * tp1 + oz * ts1 + Rz) * dt,
+            (m * ts1 * eyz + Ryz) * dt, (m * ts1 * exz + Rxz) * dt, (m6 * ts1 * exy + Rxy) * dt)
 end
 
 Base.@propagate_inbounds function force3_cv!(blocks, S, it, dt, u)
@@ -360,6 +373,9 @@ function simulate_curvilinear3d(model::Union{CartData,DistributedModel}; dt=noth
     aniso = has_anisotropy(model)                               # VTI: Thomsen ε, δ, γ
     thomsen(k) = haskey(f, k) ? Float64.(f[k]) : zeros(size(Zw))
     ε, δ, γ = thomsen(:epsilon), thomsen(:delta), thomsen(:gamma)
+    tti = haskey(f, :tilt) || haskey(f, :azimuth)               # TTI: the tilt θ and azimuth φ of the symmetry axis
+    tti && !aniso && error("the DistributedModel returns a `tilt`/`azimuth`: create it with `anisotropy = true`")
+    θ, φ = (haskey(f, k) ? deg2rad.(Float64.(f[k])) : zeros(size(Zw)) for k in (:tilt, :azimuth))
     ts = relaxation_times(fq_min, fq_max)
     zeta = constq_zeta(fq_min, fq_max, ts)
     # blocks: from the columns (flattened; the decisions over the owned columns of all processes)
@@ -372,7 +388,7 @@ function simulate_curvilinear3d(model::Union{CartData,DistributedModel}; dt=noth
     Hξ, Hψ = sbp_weights(nx, hξ), sbp_weights(ny, hψ)
     hostblocks = map(1:length(edges)-1) do b
         r = edges[b]:edges[b+1]
-        m = map(A -> copy(A[:, :, r]), (ρ, vp, vs, qp, qs, ε, δ, γ))
+        m = map(A -> copy(A[:, :, r]), (ρ, vp, vs, qp, qs, ε, δ, γ, θ, φ))
         kmap = [r[k] for i in 1:nwx, j in 1:nwy, k in eachindex(r)]       # the model row of the material of each node
         for (q, side, src) in ((b - 1, false, 2), (b, true, length(r) - 1))
             1 <= q <= length(rows) || continue
@@ -384,7 +400,7 @@ function simulate_curvilinear3d(model::Union{CartData,DistributedModel}; dt=noth
                 kmap[i, j, kk] = kmap[i, j, src]
             end
         end
-        bρ, bvp, bvs, bqp, bqs, bε, bδ, bγ = m
+        bρ, bvp, bvs, bqp, bqs, bε, bδ, bγ, bθ, bφ = m
         nz = length(r)
         _, hη = sbp_grid(0.0, 1.0, nz)
         Zb = Zm[:, :, r]
@@ -435,7 +451,7 @@ function simulate_curvilinear3d(model::Union{CartData,DistributedModel}; dt=noth
             end
         end
         (; nz, hη, Z=Zb, J, Jx, Jy, ρ=bρ, lam, mu, taup, taus, a1, a2, a3, vp=bvp, vs=bvs, ε=bε, δ=bδ, γ=bγ, wx, wz, s13, mu55, mu66,
-           kmap, da, fluid=block_fluid(bvs[ia-ow:ib-ow, ja-owy:jb-owy, :], b, par))
+           θ=bθ, φ=bφ, kmap, da, fluid=block_fluid(bvs[ia-ow:ib-ow, ja-owy:jb-owy, :], b, par))
     end
     nb = length(hostblocks)
     # PML: profiles (identity until the time step is known) and memory variables (x, y layers: 2na columns, 2na rows; bottom: na)
@@ -460,7 +476,7 @@ function simulate_curvilinear3d(model::Union{CartData,DistributedModel}; dt=noth
         R() = KernelAbstractions.zeros(backend, FT, NM, nlx, nly, H.nz)
         loc(A) = dev(FT.(A[xr .- ow, yr .- owy, :]))
         mem = attenuation ? (; R11=R(), R22=R(), R33=R(), R23=R(), R13=R(), R12=R()) : (;)
-        vti = aniso ? (; wx=loc(H.wx), wz=loc(H.wz), s13=loc(H.s13), mu66=loc(H.mu66)) : (;)
+        vti = aniso ? merge((; wx=loc(H.wx), wz=loc(H.wz), s13=loc(H.s13), mu66=loc(H.mu66)), tti ? (; tilt=loc(H.θ), azim=loc(H.φ)) : (;)) : (;)
         r0 = H.kmap[1, 1, 2] - 2                                    # (the mesh row of node k: r0 + k)
         sponge = absorber === :cerjan ? (; gs=loc([cerjan_factor(i + ow, nx, na) * cerjan_factor(j + owy, ny, na) * cerjan_factor(r0 + k, typemax(Int), na)
                                                    for i in 1:nwx, j in 1:nwy, k in 1:H.nz])) : (;)

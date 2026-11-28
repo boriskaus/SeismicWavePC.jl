@@ -57,7 +57,7 @@ function divrot_cv(blocks, stress!, N, backend, FT)
     half(B) = (A = zero_(B); fill!(A, FT(0.5)); A)
     vn, sn = N == 2 ? ((:V1, :V2), (:S11, :S22, :S12)) : ((:V1, :V2, :V3), (:S11, :S22, :S33, :S23, :S13, :S12))
     rn = N == 2 ? (:R11, :R22, :R12) : (:R11, :R22, :R33, :R23, :R13, :R12)
-    plain(B, V, S) = merge(Base.structdiff(B, NamedTuple{(:wx, :wz, :s13, :mu66)}), NamedTuple{vn}(V), NamedTuple{sn}(S),
+    plain(B, V, S) = merge(Base.structdiff(B, NamedTuple{(:wx, :wz, :s13, :mu66, :tilt, :azim)}), NamedTuple{vn}(V), NamedTuple{sn}(S),
                            NamedTuple{rn}(ntuple(_ -> nothing, length(rn))), (; lam=zero_(B), mu=half(B), tp=nothing, ts=nothing, pml=nothing))
     neg = Tuple(zero_(B) for B in blocks)
     SA = Tuple(ntuple(_ -> zero_(B), length(sn)) for B in blocks)

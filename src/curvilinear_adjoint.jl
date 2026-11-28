@@ -106,6 +106,49 @@ end
 drive_curvilinear(d::CurvilinearGradient, c) = curvilinear_gradient(d, c, 2)
 drive_curvilinear3(d::CurvilinearGradient, c) = curvilinear_gradient(d, c, 3)
 
+# TTI (anisotropy.jl): the stress update is σ += M F(Mᵀ e) dt with F the VTI update in the frame of the axis, M the rotation
+# of the stress back (σ = Aᵀ σ' A) and Mᵀ that of engineering strains. Its transpose rotates the adjoint stress P and the
+# sums Q of the adjoint memory variables (both pair with the stress: engineering, as strains) and the strains e into the
+# frame of the axis, applies the VTI adjoint there and rotates its output Y (a stress) back. The gradient with respect to
+# an angle: dt [(Ė e)·(Cp Zp' + Cs X') + e'·(Cp Ė Zp + Cs Ė X)], Ė the derivative of Mᵀ, Zp, X the adjoint stresses that
+# weigh the parts of C relaxing with τp and τs (as in the VTI adjoint). `pos[k]`: the stress array of the 3D component
+# k = (xx, yy, zz, yz, xz, xy) (0: none; 2D P-SV: xx, zz, xz; SH: yz, xy), the axis tilts in x-z in 2D (φ = 0).
+@inline emb6(X, n, ::Val{pos}, z) where {pos} = ntuple(k -> pos[k] == 0 ? z : X[pos[k]][n], Val(6))
+@inline function set6!(X, n, v, ::Val{pos}) where {pos}
+    ntuple(Val(6)) do k
+        pos[k] == 0 || (X[pos[k]][n] = v[k])
+        nothing
+    end
+    return nothing
+end
+@inline tti_angles(T, n) = (T.tilt[n], T.azim === nothing ? zero(eltype(T.tilt)) : T.azim[n])
+Base.@propagate_inbounds function tti_adjoint_in!(Pl, Ql, el, P, Q, e, T, vp, n)
+    A = axis_frame(tti_angles(T, n)...)
+    z = zero(eltype(T.tilt))
+    set6!(Pl, n, full_shear(rot3(A, half_shear(emb6(P, n, vp, z)))), vp)
+    set6!(Ql, n, full_shear(rot3(A, half_shear(emb6(Q, n, vp, z)))), vp)
+    set6!(el, n, rot3(A, emb6(e, n, vp, z)), vp)
+end
+Base.@propagate_inbounds function tti_adjoint_out!(Y, gθ, gφ, Pl, Ql, el, P, Q, e, M, τp, τs, d2, dt, T, vp, n)
+    θ, φ = tti_angles(T, n)
+    A = axis_frame(θ, φ)
+    z = zero(θ)
+    set6!(Y, n, rot3(transpose3(A), emb6(Y, n, vp, z)), vp)
+    tp, ts = τp === nothing ? z : τp[n], τs === nothing ? z : τs[n]
+    wx, wz, s13, mu, m66 = map(X -> X[n], M)
+    Pg, Qg, Pq, Qq = emb6(P, n, vp, z), emb6(Q, n, vp, z), emb6(Pl, n, vp, z), emb6(Ql, n, vp, z)
+    wp(P_, Q_) = map((p, q) -> (1 + tp * (1 + d2)) * p - tp * q, P_, Q_)
+    ws(P_, Q_) = map((p, q) -> (1 + ts * (1 + d2)) * p - ts * q, P_, Q_)
+    Zg, Xg, Zl, Xl = wp(Pg, Qg), ws(Pg, Qg), wp(Pq, Qq), ws(Pq, Qq)
+    eg, elq = emb6(e, n, vp, z), full_shear(emb6(el, n, vp, z))      # (e: tensor; el engineering)
+    CZ = map(+, vti_split(wx, wz, s13, mu, m66, Zl)[1], vti_split(wx, wz, s13, mu, m66, Xl)[2])
+    dθ, dφ = axis_frame_derivatives(θ, φ)
+    g(Ad) = (Ee = full_shear(drot3(A, Ad, eg)); EZ = full_shear(drot3(A, Ad, half_shear(Zg))); EX = full_shear(drot3(A, Ad, half_shear(Xg)));
+             dt * (dot6(Ee, CZ) + dot6(elq, map(+, vti_split(wx, wz, s13, mu, m66, EZ)[1], vti_split(wx, wz, s13, mu, m66, EX)[2]))))
+    gθ[n] += g(dθ)
+    gφ === nothing || (gφ[n] += g(dφ))
+end
+
 function curvilinear_gradient(d::CurvilinearGradient, c, N)
     (; backend, FT, blocks, hostblocks, nb, nx, nzt, hx, ox, par, dtT, nt, record_every, momentum!, stress!, step!, FS, forces,
        Hξ, attenuation, dev, model, all_traces, density_unit, vc, ts, fq_ref, loc) = c
@@ -163,14 +206,20 @@ function curvilinear_gradient(d::CurvilinearGradient, c, N)
     Xw, Xpw = (Tuple(ntuple(_ -> zero_(b), nS) for b in 1:nb) for _ in 1:2)
     # the moduli in the VTI form (isotropic media: wx = wz = √(λ+2μ), s13 = -2μ, mu66 = μ): one adjoint for both
     Mv = Tuple(map(A -> dev(FT.(loc(A))), (H.wx, H.wz, H.s13, H.mu55, H.mu66)) for H in hostblocks)
-    Grad = Tuple((; wx=zero_(b), wz=zero_(b), s13=zero_(b), mu=zero_(b), m66=zero_(b), tp=zero_(b), ts=zero_(b), iρJ=zero_(b),
-                    a=ntuple(_ -> zero_(b), nV)) for b in 1:nb)
+    tilted_ = haskey(blocks[1], :tilt)                               # TTI: rotate into the frame of the axis
+    tilt3 = tilted_ && N == 3
+    Grad = Tuple(merge((; wx=zero_(b), wz=zero_(b), s13=zero_(b), mu=zero_(b), m66=zero_(b), tp=zero_(b), ts=zero_(b), iρJ=zero_(b),
+                          a=ntuple(_ -> zero_(b), nV)), tilted_ ? (; tilt=zero_(b), azim=tilt3 ? zero_(b) : nothing) : (;)) for b in 1:nb)
+    # (TTI: P, Q and the strains in the frame of the axis; the stress arrays of the 3D components)
+    Loc = tilted_ ? Tuple(ntuple(_ -> ntuple(_ -> zero_(b), nS), 3) for b in 1:nb) : nothing
+    vpos = Val(sh ? (0, 0, 0, 2, 0, 1) : N == 2 ? (1, 0, 2, 0, 3, 0) : (1, 2, 3, 4, 5, 6))
+    angles(b) = (; tilt=blocks[b].tilt, azim=tilt3 ? blocks[b].azim : nothing)
     Win = Tuple(ntuple(_ -> zero_(b), nV) for b in 1:nb)        # inputs of G (velocities)
     Gout = Tuple(ntuple(_ -> zero_(b), nS) for b in 1:nb)      # its strains (normal; shear halved)
     Yin = Tuple(ntuple(_ -> zero_(b), nS) for b in 1:nb)       # inputs of A (stresses)
     Aout = Tuple(ntuple(_ -> zero_(b), nV) for b in 1:nb)       # A y
     nomem = attenuation ? NamedTuple{rn}(ntuple(_ -> nothing, nS)) : (;)
-    Gblk = Tuple(merge(Base.structdiff(blocks[b], NamedTuple{(:wx, :wz, :s13, :mu66)}), NamedTuple{vn}(Win[b]), NamedTuple{sn}(Gout[b]), nomem,
+    Gblk = Tuple(merge(Base.structdiff(blocks[b], NamedTuple{(:wx, :wz, :s13, :mu66, :tilt, :azim)}), NamedTuple{vn}(Win[b]), NamedTuple{sn}(Gout[b]), nomem,
                        (; lam=zero_(b), mu=fill_(b, 0.5), mu66=fill_(b, 0.5), tp=nothing, ts=nothing, pml=nothing)) for b in 1:nb)
     tractions(b) = N == 3 ? (; G1=zero_(b), G2=zero_(b), G3=zero_(b)) : (;)                 # (3D: the η tractions of A)
     Ablk = Tuple(merge(blocks[b], NamedTuple{sn}(Yin[b]), NamedTuple{vn}(Aout[b]), (; iρJ=fill_(b, 1), pml=nothing), tractions(b)) for b in 1:nb)
@@ -277,12 +326,27 @@ function curvilinear_gradient(d::CurvilinearGradient, c, N)
     # mu, (mu66)), w = (wx, [wx,] wz); C₁ = C(1 + τp(1+d2), 1 + τs(1+d2)), Cτ = C(τp, τs). X = ts₁ P - τs Q, X' = (1+d2) P - Q.
     function stress_adjoint!(b)
         P, e, Q, gr, Y = comps(Adj[b], sn), Gout[b], Qm[b], Grad[b], Yin[b]
+        stress_adjoint_vti!(b, P, e, Q, gr, Y, true)
+        if tilted_                     # P, Q, e in the frame of the axis: the VTI adjoint there, Y rotated back
+            Pl, Ql, el = Loc[b]
+            foreach_item!(backend, tti_adjoint_in!, (Pl, Ql, el, P, Q, e, angles(b), vpos), length(e[1]))
+            stress_adjoint_vti!(b, Pl, el, Ql, gr, Y, false)
+            B = blocks[b]
+            foreach_item!(backend, tti_adjoint_out!, (Y, gr.tilt, gr.azim, Pl, Ql, el, P, Q, e, Mv[b], attenuation && !sh ? B.tp : nothing,
+                                                     attenuation ? B.ts : nothing, d2, dtT, angles(b), vpos), length(e[1]))
+        else
+            stress_adjoint_vti!(b, P, e, Q, gr, Y, false)
+        end
+    end
+    "the adjoint memory variables (`mem`: only those, from the adjoint stresses P) or the VTI adjoint of P, Q, e (`mem` false)"
+    function stress_adjoint_vti!(b, P, e, Q, gr, Y, mem)
         wx, wz, s13, mu, m66 = Mv[b]
         pe, pP, pQ, Z = Wk[b]
         X, Xp = Xw[b], Xpw[b]
         B = blocks[b]
         τp, τs = attenuation ? (sh ? zero(FT) : B.tp, B.ts) : (zero(FT), zero(FT))
-        if attenuation
+        if mem
+            attenuation || return nothing
             for k in 1:nS
                 fill!(Q[k], 0)
                 for j in 1:NM
@@ -291,6 +355,7 @@ function curvilinear_gradient(d::CurvilinearGradient, c, N)
                     @. Q[k] += c2[j] * R
                 end
             end
+            return nothing
         end
         if sh                          # SH: σxy (C66) and σyz (C44), both shear (e: γ/2)
             for k in 1:2
@@ -466,10 +531,10 @@ function curvilinear_gradient(d::CurvilinearGradient, c, N)
     KernelAbstractions.synchronize(backend)
     # 4. to ρ, vp, vs [per kg/m³, km/s], (ε, δ, γ,) Qp, Qs on the nodes of the model (owned nodes; summed over the processes)
     aniso = has_anisotropy(model)
-    gρ, gvp, gvs, gε, gδ, gγ, gqp, gqs, gL = (zeros(nx, ny, nzt) for _ in 1:9)
+    gρ, gvp, gvs, gε, gδ, gγ, gqp, gqs, gL, gθ, gφ = (zeros(nx, ny, nzt) for _ in 1:11)
     f = model.fields
     for (b, H) in enumerate(hostblocks)
-        g = map(x -> x isa Tuple ? map(A -> Float64.(Array(A)), x) : Float64.(Array(x)), Grad[b])     # (loop-local)
+        g = map(x -> x isa Tuple ? map(A -> Float64.(Array(A)), x) : x === nothing ? nothing : Float64.(Array(x)), Grad[b])     # (loop-local)
         hf = (; rho=H.ρ, vp=H.vp, vs=H.vs, ε=H.ε, δ=H.δ, γ=H.γ, taup=H.taup, taus=H.taus)
         own = N == 2 ? CartesianIndices((hx+1:hx+c.no, 1:H.nz)) : CartesianIndices((hx+1:hx+c.nox, hx+1:hx+c.noy, 1:H.nz))
         off = N == 2 ? CartesianIndex(ox, 0) : CartesianIndex(ox, oy, 0)                     # local -> global
@@ -489,6 +554,10 @@ function curvilinear_gradient(d::CurvilinearGradient, c, N)
             if aniso
                 gε[node] += dir(4) + da(3); gδ[node] += dir(5); gγ[node] += dir(6) + da(4)
             end
+            if tilted_                                 # [per degree]
+                gθ[node] += deg2rad(g.tilt[Il])
+                tilt3 && (gφ[node] += deg2rad(g.azim[Il]))
+            end
             if attenuation
                 dtp, dts = g.tp[Il] + dir(7), g.ts[Il] + dir(8)
                 qp, qs = haskey(f, :Qp) ? f.Qp[node] : Inf, haskey(f, :Qs) ? f.Qs[node] : Inf
@@ -500,10 +569,10 @@ function curvilinear_gradient(d::CurvilinearGradient, c, N)
             end
         end
     end
-    par === nothing || foreach(A -> MPI.Allreduce!(A, +, par.comm), (gρ, gvp, gvs, gε, gδ, gγ, gqp, gqs, gL))
+    par === nothing || foreach(A -> MPI.Allreduce!(A, +, par.comm), (gρ, gvp, gvs, gε, gδ, gγ, gqp, gqs, gL, gθ, gφ))
     rho_unit = density_unit === :g_cm3 ? 1e3 : 1.0
     ill = L === nothing ? (;) : (; illumination=gL)
-    vti = aniso ? (; epsilon=gε, delta=gδ, gamma=gγ) : (;)
+    vti = merge(aniso ? (; epsilon=gε, delta=gδ, gamma=gγ) : (;), tilted_ ? (tilt3 ? (; tilt=gθ, azimuth=gφ) : (; tilt=gθ)) : (;))
     grad = CartData(model.x.val, model.y.val, model.z.val, merge((; rho=gρ .* rho_unit, vp=gvp .* 1e3, vs=gvs .* 1e3), vti, (; Qp=gqp, Qs=gqs), ill))
     flush!(Wfb); flush!(Wmb)
     return J, grad, curvilinear_source_gradients(c, sh ? 1 : N, AF, gmF, AM, gmM)
@@ -610,6 +679,8 @@ function born_curvilinear(d::BornDriver, c)
             δ[:mu] = @. δρ * vs^2 / χs^2 + 2ρ * vs * δvs / χs^2 - 2ρ * vs^2 / χs^3 * dχs * δts
             δ[:lam] = @. δρ * vp^2 / χp^2 + 2ρ * vp * δvp / χp^2 - 2ρ * vp^2 / χp^3 * dχp * δtp - 2δ[:mu]
         end
+        haskey(B, :tilt) && (δ[:tilt] = deg2rad.(at(:tilt, 1.0, 0.0)))     # TTI: the angles of the axis [rad]
+        haskey(B, :azim) && (δ[:azim] = deg2rad.(at(:azimuth, 1.0, 0.0)))
         if attenuation
             haskey(B, :tp) && (δ[:tp] = δtp)            # (SH: no P waves)
             δ[:ts] = δts

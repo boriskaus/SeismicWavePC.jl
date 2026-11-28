@@ -17,8 +17,10 @@
 "Is the medium VTI (`Val(true)`) or isotropic? From the fields of the NamedTuple (a compile-time constant)."
 @generated anisotropic(::NamedTuple{K}) where {K} = :wx in K ? :(Val(true)) : :(Val(false))
 
-"Does the model have VTI fields (`epsilon`, `delta`, `gamma`)?"
-has_anisotropy(model) = any(f -> haskey(model.fields, f), (:epsilon, :delta, :gamma))
+"Does the model have VTI fields (`epsilon`, `delta`, `gamma`) or a tilted symmetry axis (`tilt`, `azimuth`: TTI)?"
+has_anisotropy(model) = any(f -> haskey(model.fields, f), (:epsilon, :delta, :gamma, :tilt, :azimuth))
+"Does the model tilt the symmetry axis (TTI: fields `tilt`, `azimuth`)?"
+has_tilt(model) = model isa CartData && any(f -> haskey(model.fields, f), (:tilt, :azimuth))
 has_anisotropy(model::DistributedModel) = model.anisotropy
 
 @inline pos(x) = ifelse(x > zero(x), x, zero(x))
@@ -52,6 +54,66 @@ function vti_medium(rho, vp, vs, ε, δ, γ, taup, taus, ts, fq_ref)
     lam = wz .^ 2 .- 2mu
     vpmax = vti_vmax.(rho, wx, wz, s13, mu)
     return (; lam, mu, wx, wz, s13, mu66, vpmax)
+end
+
+# ------------------------------------------------------------------ tilted transverse isotropy (TTI, curvilinear grids)
+# The symmetry axis n = (sin θ cos φ, sin θ sin φ, cos θ) (θ: `tilt` from the vertical, φ: `azimuth` from x towards y; 2D:
+# n = (sin θ, cos θ) in the x-z plane). The stress update rotates the strain rate into the frame of the axis (rows of A:
+# e₁' = (cos θ cos φ, cos θ sin φ, -sin θ), e₂' = (-sin φ, cos φ, 0), e₃' = n), applies the VTI update there and rotates the
+# stress increment back: σ = Aᵀ C'(A ε Aᵀ) A. The stiffness stays symmetric and positive definite, and its split into the
+# parts relaxing with Qp and Qs is rotated with it (qP along the axis relaxes with Qp). The memory variables of the
+# attenuation live in the frame of the axis (the axis does not change in time). The grid stores θ (and φ) [rad] per node.
+
+"Is the block tilted (TTI: an array `tilt`)? (a compile-time constant)"
+@generated tilted(::NamedTuple{K}) where {K} = :tilt in K ? :(Val(true)) : :(Val(false))
+
+"A T Aᵀ of the symmetric 2 × 2 tensor (xx, zz, xz), A = [c -s; s c] (`s → -s`: the inverse)."
+@inline function rot2(c, s, xx, zz, xz)
+    cc, ss, cs = c * c, s * s, c * s
+    return (cc * xx + ss * zz - 2cs * xz, ss * xx + cc * zz + 2cs * xz, cs * (xx - zz) + (cc - ss) * xz)
+end
+
+"The rows of A, the frame of the symmetry axis, from the tilt θ and azimuth φ [rad] (θ = 0: the identity)."
+@inline function axis_frame(θ, φ)
+    st, ct = sincos(θ)
+    sp, cp = sincos(φ)
+    return ((ct * cp, ct * sp, -st), (-sp, cp, zero(st)), (st * cp, st * sp, ct))
+end
+
+"A T Aᵀ of the symmetric tensor T = (xx, yy, zz, yz, xz, xy), A given by its rows."
+@inline function rot3(A, T)
+    xx, yy, zz, yz, xz, xy = T
+    S = ((xx, xy, xz), (xy, yy, yz), (xz, yz, zz))
+    t(i, j) = sum(ntuple(k -> A[i][k] * (S[k][1] * A[j][1] + S[k][2] * A[j][2] + S[k][3] * A[j][3]), Val(3)))
+    return (t(1, 1), t(2, 2), t(3, 3), t(2, 3), t(1, 3), t(1, 2))
+end
+"The transpose of A (rows)."
+@inline transpose3(A) = ntuple(i -> ntuple(j -> A[j][i], Val(3)), Val(3))
+
+"The derivatives of the rows of A with respect to θ and φ."
+@inline function axis_frame_derivatives(θ, φ)
+    st, ct = sincos(θ)
+    sp, cp = sincos(φ)
+    z = zero(st)
+    return ((-st * cp, -st * sp, -ct), (z, z, z), (ct * cp, ct * sp, -st)), ((-ct * sp, ct * cp, z), (-cp, -sp, z), (-st * sp, st * cp, z))
+end
+"Ȧ T Aᵀ + A T Ȧᵀ: the derivative of `rot3(A, T)` for the derivative Ȧ of A (rows)."
+@inline function drot3(A, Ad, T)
+    xx, yy, zz, yz, xz, xy = T
+    S = ((xx, xy, xz), (xy, yy, yz), (xz, yz, zz))
+    t(i, j) = sum(ntuple(k -> Ad[i][k] * (S[k][1] * A[j][1] + S[k][2] * A[j][2] + S[k][3] * A[j][3]) +
+                              A[i][k] * (S[k][1] * Ad[j][1] + S[k][2] * Ad[j][2] + S[k][3] * Ad[j][3]), Val(3)))
+    return (t(1, 1), t(2, 2), t(3, 3), t(2, 3), t(1, 3), t(1, 2))
+end
+# 6-vectors (xx, yy, zz, yz, xz, xy): engineering (shear strains γ, adjoint stresses) <-> tensor components
+@inline half_shear(v) = (v[1], v[2], v[3], v[4] / 2, v[5] / 2, v[6] / 2)
+@inline full_shear(v) = (v[1], v[2], v[3], 2v[4], 2v[5], 2v[6])
+@inline dot6(a, b) = sum(ntuple(k -> a[k] * b[k], Val(6)))
+"The two parts of the VTI stiffness (w wᵀ: relaxing with τp; the rest: τs) applied to an engineering 6-vector `v`."
+@inline function vti_split(wx, wz, s13, mu, m66, v)
+    pe = wx * (v[1] + v[2]) + wz * v[3]
+    n66, z = -2m66, zero(pe)
+    return (wx * pe, wx * pe, wz * pe, z, z, z), (n66 * v[2] + s13 * v[3], n66 * v[1] + s13 * v[3], s13 * (v[1] + v[2]), mu * v[4], mu * v[5], m66 * v[6])
 end
 
 # ------------------------------------------------------------------ kernels: the normal stresses with w wᵀ (τp) and the rest (τs)

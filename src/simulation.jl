@@ -87,7 +87,8 @@ Run a visco-elastic wave propagation simulation (OpenSWPC algorithm) on the velo
 
 `model` is a `CartData` (coordinates in km, z up; constant spacing in x and y, constant or smoothly varying in z) with
 fields `rho` [kg/m³], `vp`, `vs` [km/s] and optionally `Qp`, `Qs` (default: no attenuation) and the Thomsen parameters
-`epsilon`, `delta`, `gamma` (VTI anisotropy; `vp`, `vs` are then vertical velocities). Cells with `vp = vs = 0` are
+`epsilon`, `delta`, `gamma` (VTI anisotropy; `vp`, `vs` are then vertical velocities; on curvilinear grids also `tilt`,
+`azimuth` [°]: a tilted symmetry axis, TTI). Cells with `vp = vs = 0` are
 air: the free surface and topography follow from that. Cells with `vs = 0` and `vp > 0` are water. A `CartData` of size
 `(nx, 1, nz)` gives a 2D simulation in the x-z plane. A model too large to hold as a whole is given as a
 [`DistributedModel`](@ref), of which every MPI process builds only its own subdomain.
@@ -141,6 +142,7 @@ function simulate(model::Union{CartData,DistributedModel}; wave=:psv, interpolat
     if (model isa CartData && (grid === :curvilinear || (grid === :auto && is_curvilinear(model)))) || (model isa DistributedModel && is_curvilinear(model))
         return size(model)[2] == 1 ? simulate_curvilinear(model; wave, kwargs...) : simulate_curvilinear3d(model; kwargs...)
     end
+    has_tilt(model) && error("a tilted symmetry axis (`tilt`, `azimuth`: TTI) needs grid = :curvilinear (also for flat surfaces)")
     mode = size(model)[2] == 1 ? wave : :p3d
     mode in (:psv, :sh, :p3d) || error("wave must be :psv or :sh, got :$wave")
     interpolation in (:cell, :sinc) || error("interpolation must be :cell or :sinc, got :$interpolation")
