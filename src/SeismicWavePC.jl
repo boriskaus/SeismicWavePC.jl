@@ -47,6 +47,7 @@ include("born.jl")
 include("curvilinear_adjoint.jl")
 include("curvilinear_teleseismic.jl")
 include("anisotropy.jl")
+include("aniso_layers.jl")
 include("inversion.jl")
 include("analytic.jl")
 

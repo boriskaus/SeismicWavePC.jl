@@ -74,7 +74,8 @@ background, scattered = born(model, δm; dt, nt, sources, stations)
 - **Exactness:** it is the exact linearization of the discrete simulation (free surface, PML, attenuation), and the
   transpose of the gradient of `misfit_gradient`: ⟨J δm, r⟩ = ⟨δm, Jᵀ r⟩ to rounding errors (10⁻¹⁵ with `T = Float64`),
   for P-SV, SH and 3D, moment tensors and forces, at cells or between them.
-- `δm` may also perturb the Thomsen parameters `epsilon`, `delta`, `gamma` of VTI models.
+- `δm` may also perturb the Thomsen parameters `epsilon`, `delta`, `gamma` of VTI models, and `tilt`, `azimuth` of TTI
+  models (curvilinear grids).
 - **Use:** with `misfit_gradient` (Jᵀ r) it gives Gauss-Newton Hessian-vector products JᵀJ δm (Newton-type inversions,
   uncertainties of the Laplace approximation) and least-squares migration; alone, it shows how a model change shows up in
   the data.

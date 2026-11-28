@@ -65,7 +65,7 @@ boundaries. The incoming field is the exact solution for the horizontally layere
 - `misfit_gradient` gives exact gradients with it (the injection acts as sources independent of the model inside the box).
 
 Requirements: the model must be horizontally layered, elastic and without water along the box boundary and below it (the
-background; it is read from the model), and the box must keep 4 cells from the absorbing layers. Inside the box the model
+background; it is read from the model; on curvilinear grids it may be VTI or TTI, see [Tilted symmetry axis (TTI)](@ref)), and the box must keep 4 cells from the absorbing layers. Inside the box the model
 can be anything (also attenuating). The particle velocity of the incoming wave is `amplitude * stf(t)` (for source time
 functions with integral 1, such as the default `:kupper`, it carries the displacement `amplitude` [m]), it reaches the box
 first at `t0`, and `backazimuth` is the direction towards the source (clockwise from north, +y); in 2D 270° (from −x, the

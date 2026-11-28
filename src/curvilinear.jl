@@ -1070,8 +1070,9 @@ function simulate_curvilinear(model::Union{CartData,DistributedModel}; dt=nothin
         return tab
     end
     # teleseismic wave: total-field / scattered-field corrections at the nodes near the box boundary
-    column(ig, jg) = (cz = model_columns(model, ig:ig, 1:1, 2); (vec(1e3 .* cz[1]),
-                      [(Float64(cz[2].rho[1, q]) * (density_unit === :g_cm3 ? 1e3 : 1.0), 1e3cz[2].vp[1, q], 1e3cz[2].vs[1, q]) for q in axes(cz[1], 2)]))
+    column(ig, jg) = (cz = model_columns(model, ig:ig, 1:1, 2); fz(k, q) = haskey(cz[2], k) ? Float64(cz[2][k][1, q]) : 0.0;
+                      (vec(1e3 .* cz[1]), [(Float64(cz[2].rho[1, q]) * (density_unit === :g_cm3 ? 1e3 : 1.0), 1e3cz[2].vp[1, q], 1e3cz[2].vs[1, q],
+                                            fz(:epsilon, q), fz(:delta, q), fz(:gamma, q), deg2rad(fz(:tilt, q)), 0.0) for q in axes(cz[1], 2)]))
     TW, ntw = isempty(tws) ? (nothing, 0) :
               teleseismic_cv(tws[1], 2, sh, (; hostblocks, gx, nx, ia, ib, ow, ox, dev, FT, dt, nt, tbeg, stf, blocks, na, pml, column, aniso,
                                               rows, loc=A -> A[xr .- ow, :]))[1:2]

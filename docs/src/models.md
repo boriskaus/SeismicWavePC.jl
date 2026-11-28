@@ -79,7 +79,7 @@ result = simulate(model; tmax=20.0, sources, stations)           # dt from the s
   grid (also with attenuation, on GPUs and with MPI).
 - **Anisotropy (VTI)** as on the staggered grid (fields `epsilon`, `delta`, `gamma`; the symmetry axis stays vertical on the
   deformed mesh), also in gradients and Born modelling. **Tilted axes (TTI)** with the fields `tilt` and `azimuth` (see
-  [Tilted symmetry axis (TTI)](@ref); forward simulations only).
+  [Tilted symmetry axis (TTI)](@ref)), with gradients, Born modelling, PMLs and teleseismic waves.
 - **Snapshots:** ParaView files and callbacks of the whole wavefield, and netCDF planes ([`Snapshots`](@ref): the free
   surface `fs` on the topography, `xy` planes and sections resampled at regular heights; `:v`, `:u`, `:ps`, also in pieces).
 - **Checkpoints** (`checkpoint`, `checkpoint_every`, `restart`) as on the staggered grid.
@@ -87,7 +87,8 @@ result = simulate(model; tmax=20.0, sources, stations)           # dt from the s
 - **Teleseismic waves** ([`TeleseismicWave`](@ref)) as on the staggered grid: total-field / scattered-field injection
   along a box (the box reaches up to the topography; the model must be horizontally layered and elastic along its sides
   and bottom, where the topography must be flat), with the exact gradient. `PlaneWave` (OpenSWPC's initial plane wave)
-  is not available on curvilinear grids: use `TeleseismicWave`.
+  is not available on curvilinear grids: use `TeleseismicWave`. The background may be VTI or TTI (exact incoming field
+  of anisotropic layers, see [Tilted symmetry axis (TTI)](@ref)).
 
 ![A hill, a Moho-like interface and a magma chamber on a curvilinear grid](assets/2D_curvilinear.png)
 
@@ -120,8 +121,8 @@ model = CartData(X, Y, Z, (; rho, vp, vs, epsilon=fill(0.1, size(X)), delta=fill
   isotropic scheme.
 - Everything else works as for isotropic models: free surface and topography, oceans, PML, sources and stations between
   grid points, GPUs, MPI (also a [`DistributedModel`](@ref) created with `anisotropy = true`), gradients (`misfit_gradient` also returns `epsilon`, `delta`, `gamma`; exact, as checked against
-  automatic differentiation) and Born modelling. Not yet: plane waves and teleseismic waves (their incoming field assumes
-  isotropic layers).
+  automatic differentiation) and Born modelling. Teleseismic waves in VTI (and TTI) layers: on curvilinear grids (see
+  below); not yet on the staggered grid, nor OpenSWPC's plane waves.
 - Models without these fields run the isotropic kernels: anisotropy costs nothing when it is not used.
 
 ## Tilted symmetry axis (TTI)
@@ -152,10 +153,25 @@ model = addfield(mesh, (; rho, vp, vs, epsilon=fill(0.2, size(X)), delta=fill(0.
   rotated VTI solution is reproduced to the discretization error, which falls with the grid spacing as for VTI (2D: 1.6 %
   → 0.3 % when the source period grows by 1.5×; 3D: 5 % → 1.4 % from 0.2 to 0.13 km). Long runs with topography, an
   interface, attenuation and an axis varying in space decay (impedance absorber and PML).
+- **Gradients and Born modelling:** exact, as for VTI. [`misfit_gradient`](@ref) also returns `tilt` (and `azimuth` in 3D)
+  [per degree]: the transposed update rotates the adjoint stresses, the sums of the adjoint memory variables and the
+  strains into the frame of the axis, applies the VTI adjoint and rotates back; the derivatives with respect to the angles
+  follow in closed form from dA/dθ and dA/dφ. [`born`](@ref) takes perturbations `tilt`, `azimuth` (tangent numbers
+  through the rotation). Checked against finite differences (2D P-SV and SH with attenuation, impedance absorber and PML,
+  3D; ~1e-8) and by the dot test of Born and gradient (3D, 1e-15).
+- **PMLs** (`absorber = :pml`, `:mpml`) work with TTI, also in the gradient. CFS-PMLs can become unstable in strongly
+  anisotropic media (a known property of PMLs); none of our checks did, but check long runs or use `absorber = :impedance`.
+  The impedance absorber uses the speeds of the untilted axis (it absorbs a little less).
+- **Teleseismic waves** ([`TeleseismicWave`](@ref)) in a background of VTI or TTI layers: the incoming field is exact, from
+  the first-order system of displacement and traction in every layer (its six eigenvalues: the vertical slownesses of the
+  three down- and three up-going waves, told apart by their vertical energy flux) and the global matrix of the free surface
+  and the interfaces. The waves are ordered quasi-P, quasi-SV, quasi-SH by their polarization; `wave = :p`, `:sv`, `:sh`
+  picks the incoming one in the half-space, and `angle` is the angle of its phase direction there. With isotropic layers it
+  gives the isotropic field to 1e-14; in TTI layers (2D) the total field in the box matches the exact one to 0.1 % and the
+  field outside is 1e-4 of the incoming (also 3D with azimuth and an oblique backazimuth), and the gradient is exact.
+  Along the box boundary the model must be horizontally layered also in ε, δ, γ, tilt and azimuth.
 - **Not yet:** the staggered solver (its normal and shear stresses live at different points: TTI would need
-  interpolation), gradients and Born modelling, teleseismic waves. The impedance absorber uses the speeds of the untilted
-  axis (it absorbs a little less); CFS-PMLs can become unstable in strongly anisotropic media (a known property of
-  PMLs), so check long runs or use `absorber = :impedance`.
+  interpolation); teleseismic waves in anisotropic layers on the staggered grid.
 
 ## Finer cells near the surface
 

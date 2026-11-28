@@ -12,7 +12,7 @@ simulation (N = 2 (P-SV, SH) or 3, the hostblocks of this process (window of col
 function teleseismic_cv(w::TeleseismicWave, N, sh, c)
     (; hostblocks, gx, nx, ia, ib, ow, ox, dev, FT, dt, nt, tbeg, stf, blocks, na, pml) = c
     gy, ny, ja, jb, owy, oy = N == 3 ? (c.gy, c.ny, c.ja, c.jb, c.owy, c.oy) : (nothing, 1, 1, 1, 0, 0)
-    c.aniso && error("TeleseismicWave: isotropic models only (the incoming field of VTI layers: not yet)")
+    aniso = c.aniso                                    # VTI/TTI layers: the incoming field from aniso_layers.jl
     sh && w.wave !== :sh && error("TeleseismicWave: SH simulations need wave = :sh")
     !sh && N == 2 && w.wave === :sh && error("TeleseismicWave: P-SV simulations need wave = :p or :sv")
     length(w.box) == (N == 3 ? 5 : 3) || error("TeleseismicWave: box needs $(N == 3 ? 5 : 3) values in $(N)D")
@@ -27,7 +27,7 @@ function teleseismic_cv(w::TeleseismicWave, N, sh, c)
     N == 3 && !(j1 > margin && j2 <= ny - margin) && error("TeleseismicWave: the box must keep $margin nodes from the sides in y")
     # the background: the column of the model 5 nodes outside the box (read by every process from the model)
     ir, jr = i1 - 5, N == 3 ? j1 - 5 : 1
-    Zcol, mat = c.column(ir, jr)                       # heights [m] and (ρ, vp, vs) per global row of that column
+    Zcol, mat = c.column(ir, jr)                       # heights [m] and (ρ, vp, vs, ε, δ, γ, θ, φ) per global row of that column
     zs = Zcol[end]                                     # the free surface of the background (flat along the box)
     kB = argmin(abs.(Zcol .- 1e3w.box[end]))
     # the block of the bottom rows: kB ± 5 inside one block, away from the closures and the bottom PML
@@ -37,16 +37,17 @@ function teleseismic_cv(w::TeleseismicWave, N, sh, c)
         error("TeleseismicWave: the bottom of the box must be 5 nodes inside a block (away from interfaces, the bottom, the PML)")
     # layers of the background: a change between two rows lies at the interface row if one is (blocks), else halfway
     depth = zs .- Zcol
-    tops, ρs, λs, μs = Float64[], Float64[], Float64[], Float64[]
+    tops, ρs, λs, μs, mats = Float64[], Float64[], Float64[], Float64[], NTuple{8,Float64}[]
+    same(a, b) = all(isapprox.(a[1:3], b[1:3]; rtol=1e-6)) && all(abs.(a[4:8] .- b[4:8]) .< 1e-6)     # (ε, δ, γ, θ, φ)
     for q in length(depth):-1:1                        # from the surface down
         ρ, vp, vs = mat[q]
         λ, μ = ρ * (vp^2 - 2vs^2), ρ * vs^2
-        if isempty(ρs) || !(ρ ≈ ρs[end] && λ ≈ λs[end] && μ ≈ μs[end])
+        if isempty(ρs) || !(aniso ? same(mat[q], mats[end]) : (ρ ≈ ρs[end] && λ ≈ λs[end] && μ ≈ μs[end]))
             top = isempty(ρs) ? 0.0 : q + 1 in c.rows ? depth[q+1] : q in c.rows ? depth[q] : (depth[q] + depth[q+1]) / 2
-            push!(tops, top); push!(ρs, ρ); push!(λs, λ); push!(μs, μ)
+            push!(tops, top); push!(ρs, ρ); push!(λs, λ); push!(μs, μ); push!(mats, mat[q])
         end
     end
-    L = Layers(tops, ρs, λs, μs)
+    L = aniso ? AnisoLayers(tops, ρs, [tti_voigt(m...) for m in mats]) : Layers(tops, ρs, λs, μs)
     # the depth grid of the tables: the depths of the rows of this column (the nodes along the box lie on them where the rows
     # are flat), each interval split in 4 (rows that are not flat: interpolated), to one interval below the bottom. (A
     # uniform grid at the finest spacing, that of the SBP closure at the surface, needs GB-sized tables.)
@@ -61,10 +62,17 @@ function teleseismic_cv(w::TeleseismicWave, N, sh, c)
     # direction, slowness, delay (as injection_setup)
     N == 2 && abs(sind(w.backazimuth)) < 0.99 && error("TeleseismicWave: in 2D the backazimuth must be 90° or 270°")
     e3 = N == 2 ? (sign(-sind(w.backazimuth)), 0.0) : (-sind(w.backazimuth), -cosd(w.backazimuth))
-    vel(j) = w.wave === :p ? sqrt((L.lam[j] + 2L.mu[j]) / L.rho[j]) : sqrt(L.mu[j] / L.rho[j])
-    p = sind(w.angle) / vel(length(L.top))
+    if aniso                                           # (the vertical slownesses of the incoming wave type per layer)
+        eh = N == 2 ? (e3[1], 0.0) : e3
+        p = aniso_incidence(L, w.wave, w.angle, eh)
+        inc = 3 + (w.wave === :p ? 1 : w.wave === :sv ? 2 : 3)
+        ηs = [abs(real(aniso_layer_waves(L.rho[j], L.C[j], (p * eh[1], p * eh[2]), eh)[1][inc])) for j in eachindex(L.top)]
+    else
+        vel(j) = w.wave === :p ? sqrt((L.lam[j] + 2L.mu[j]) / L.rho[j]) : sqrt(L.mu[j] / L.rho[j])
+        p = sind(w.angle) / vel(length(L.top))
+        ηs = [real(vslow(vel(j), p)) for j in eachindex(L.top)]
+    end
     pv = ntuple(a -> p * e3[a], Val(N - 1))
-    ηs = [real(vslow(vel(j), p)) for j in eachindex(L.top)]
     # (t0: when the wave reaches the box as given, its deepest corner on the source side; not the nodes next to it)
     zB = zs - 1e3w.box[end]
     D = vertical_delay(L, ηs, zB)
@@ -83,7 +91,8 @@ function teleseismic_cv(w::TeleseismicWave, N, sh, c)
     θ = N == 2 ? (0.0, e3[1]) : (-e3[2], e3[1])
     rot = rotation(fk, e, θ)
     names = sh ? (:Vy, :Syz, :Sxy) : N == 2 ? (:Vx, :Vz, :Sxx, :Szz, :Sxz) : (:Vx, :Vy, :Vz, :Sxx, :Syy, :Szz, :Syz, :Sxz, :Sxy)
-    tabs = teleseismic_tables_cv(w, fk, rot, p, L, zt, names, τ0, τ1, dτ, stf, FT; fcap)
+    tabs = aniso ? teleseismic_tables_cv(w, L, (p * e[1], p * e[2]), e, zt, names, τ0, τ1, dτ, stf, FT; fcap)[1] :
+                   teleseismic_tables_cv(w, fk, rot, p, L, zt, names, τ0, τ1, dτ, stf, FT; fcap)
     # z up: vz, σxz, σyz change sign (the tables: z down)
     flip = map(n -> n in (:Vz, :Sxz, :Syz) ? -one(FT) : one(FT), NamedTuple{names}(names))
     # the nodes to correct (owned): a stencil (±4) reaches across the box boundary
@@ -104,8 +113,9 @@ function teleseismic_cv(w::TeleseismicWave, N, sh, c)
         jl = max(searchsortedlast(L.top, dn), 1)          # (a node above zs: the surface row below errors)
         if all(t -> abs(dn - t) > 0.6 * hz, L.top[2:end])
             ρ, λ, μ = H.ρ[Iw], H.ρ[Iw] * (H.vp[Iw]^2 - 2H.vs[Iw]^2), H.ρ[Iw] * H.vs[Iw]^2
-            (isapprox(ρ, L.rho[jl]; rtol=1e-6) && isapprox(λ, L.lam[jl]; rtol=1e-6) && isapprox(μ, L.mu[jl]; rtol=1e-6)) ||
-                error("TeleseismicWave: the model must be horizontally layered along the box boundary (it differs at the node $((ig, jg, kg)))")
+            ok = aniso ? same((H.ρ[Iw], H.vp[Iw], H.vs[Iw], H.ε[Iw], H.δ[Iw], H.γ[Iw], H.θ[Iw], N == 3 ? H.φ[Iw] : 0.0), mats[jl]) :
+                         (isapprox(ρ, L.rho[jl]; rtol=1e-6) && isapprox(λ, L.lam[jl]; rtol=1e-6) && isapprox(μ, L.mu[jl]; rtol=1e-6))
+            ok || error("TeleseismicWave: the model must be horizontally layered along the box boundary (it differs at the node $((ig, jg, kg)))")
         end
         push!(band.b, b); push!(band.i, ig - ox); push!(band.j, jg - oy); push!(band.k, k)
     end
@@ -319,7 +329,46 @@ Base.@propagate_inbounds function tf_grad_momentum!(G, A, blocks, W, t, dt, ::Va
     v = kind === :psv ? (a.V1[I], a.V2[I]) : kind === :sh ? (a.V1[I],) : (a.V1[I], a.V2[I], a.V3[I])
     G[b].iρJ[I] += dt * sum(v .* d)
 end
+"TTI: the gradient of the stress corrections with the adjoint stress P and the strain e (engineering 6-vectors) in the frame of the axis."
+Base.@propagate_inbounds function tf_grad_tti!(g, I, P6, e6, M, θ, φ, dt, tilt3)
+    A = axis_frame(θ, φ)
+    Pl, el = full_shear(rot3(A, half_shear(P6))), full_shear(rot3(A, half_shear(e6)))
+    wx, wz, s13, mu, m66 = M
+    pe, pP = wx * (el[1] + el[2]) + wz * el[3], wx * (Pl[1] + Pl[2]) + wz * Pl[3]
+    g.wx[I] += dt * (pe * (Pl[1] + Pl[2]) + (el[1] + el[2]) * pP); g.wz[I] += dt * (pe * Pl[3] + el[3] * pP)
+    g.s13[I] += dt * (Pl[1] * el[3] + Pl[3] * el[1] + Pl[2] * el[3] + Pl[3] * el[2])
+    g.m66[I] += dt * (-2(Pl[1] * el[2] + Pl[2] * el[1]) + Pl[6] * el[6])
+    g.mu[I] += dt * (Pl[4] * el[4] + Pl[5] * el[5])
+    C(v) = map(+, vti_split(wx, wz, s13, mu, m66, v)...)
+    CP = C(Pl)
+    dθ, dφ = axis_frame_derivatives(θ, φ)
+    gr(Ad) = dt * (dot6(full_shear(drot3(A, Ad, half_shear(e6))), CP) + dot6(el, C(full_shear(drot3(A, Ad, half_shear(P6))))))
+    g.tilt[I] += gr(dθ)
+    tilt3 && (g.azim[I] += gr(dφ))
+end
 Base.@propagate_inbounds function tf_grad_stress!(G, A, blocks, Mv, W, t, dt, ::Val{kind}, n) where {kind}
+    if haskey(blocks[1], :tilt)                        # TTI (anisotropy.jl)
+        z = zero(eltype(blocks[1].J))
+        if kind === :psv
+            b, I, (ra, rb, rc, re) = tf_raw_psv(blocks, W, t, n)
+            B = blocks[b]
+            q = B.Jx[I] / B.J[I]
+            e6 = (ra + q * rb, z, re / B.J[I], z, rb / B.J[I] + rc + q * re, z)
+            P6 = (A[b].S11[I], z, A[b].S22[I], z, A[b].S12[I], z)
+        elseif kind === :sh
+            b, I, (rc, re) = tf_raw_sh(blocks, W, t, n)
+            B = blocks[b]
+            e6 = (z, z, z, re / B.J[I], z, rc + B.Jx[I] / B.J[I] * re)
+            P6 = (z, z, z, A[b].S2[I], z, A[b].S1[I])
+        else
+            b, I, e6 = tf_strain3(blocks, W, t, n)
+            a = A[b]
+            P6 = (a.S11[I], a.S22[I], a.S33[I], a.S23[I], a.S13[I], a.S12[I])
+        end
+        B = blocks[b]
+        tf_grad_tti!(G[b], I, P6, e6, map(X -> X[I], Mv[b]), B.tilt[I], kind === :p3d ? B.azim[I] : z, dt, kind === :p3d)
+        return nothing
+    end
     if kind === :psv
         b, I, (ra, rb, rc, re) = tf_raw_psv(blocks, W, t, n)
         B = blocks[b]

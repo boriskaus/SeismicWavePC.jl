@@ -23,7 +23,8 @@ boundaries take out. Use it in `sources`, also for `misfit_gradient` (the gradie
   displacement `amplitude` [m].
 
 The model must be horizontally layered (elastic, no water) along the box boundary and below: that is the background in which
-the wave is computed exactly. The box must keep 4 cells from the absorbing layers. On curvilinear grids the box is made of
+the wave is computed exactly (on curvilinear grids it may be VTI or TTI: the incoming quasi-P, quasi-SV or quasi-SH wave,
+`angle` that of its phase direction in the half-space). The box must keep 4 cells from the absorbing layers. On curvilinear grids the box is made of
 the nodes inside it (and the mesh row nearest to its bottom); the topography must be flat along its sides, and its bottom
 5 nodes away from block interfaces.
 """
@@ -204,7 +205,7 @@ function background_layers(med, g::Grid{N}, box) where {N}
 end
 
 "Travel time of the incoming wave (vertical slowness `η` per layer, real part) from the top of the half-space up to the depth `z`."
-function vertical_delay(L::Layers, η, z)
+function vertical_delay(L, η, z)
     zh = L.top[end]
     z >= zh && return -η[end] * (z - zh)
     return sum(j -> η[j] * max(min(L.top[j+1], zh) - max(L.top[j], z), 0.0), 1:length(L.top)-1)

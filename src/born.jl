@@ -67,7 +67,7 @@ Born (linearized) modelling: the seismograms `scattered` of the model perturbati
 Jacobian of the seismograms with respect to the model), and the seismograms `background` of `model`, from one simulation.
 
 - `δm`: a `CartData` on the grid of `model` with any of the fields `rho`, `vp`, `vs`, `Qp`, `Qs` (and, for VTI models,
-  `epsilon`, `delta`, `gamma`; missing fields: no perturbation), in the units of the model.
+  `epsilon`, `delta`, `gamma`, for TTI models `tilt`, `azimuth`; missing fields: no perturbation), in the units of the model.
 - `kwargs` are those of [`simulate`](@ref) (`dt`, `nt`, `stf`, `wave`, `interpolation`, `absorber`, `backend`, …);
   `T` is the floating-point type (`Float64` for tests of the linearization).
 

@@ -450,7 +450,7 @@ function curvilinear_gradient(d::CurvilinearGradient, c, N)
             # moment tensors (stress glut, after the stress update)
             nM > 0 && run_once!(backend, moment_sens_cv!, (AM, Wmb.out[1], Adj, MSb, window_step!(Wmb, it), dtT, Val(sn)))
             c.sponge && foreach(b -> foreach(S -> S .*= blocks[b].gs, comps(Adj[b], sn)), 1:nb)      # (the sponge is diagonal)
-            c.ntw > 0 && foreach_item!(backend, tf_grad_stress!, (Grad, Adj, slim(lite, (CV_METRIC..., :V1)), Mv, c.TW, FT(c.tbeg + (n + 0.5) * c.dt), dtT, c.tfkind), c.ntw)
+            c.ntw > 0 && foreach_item!(backend, tf_grad_stress!, (Grad, Adj, slim(lite, (CV_METRIC..., :V1, :tilt, :azim)), Mv, c.TW, FT(c.tbeg + (n + 0.5) * c.dt), dtT, c.tfkind), c.ntw)
             # stress update: gradient (λ, μ, τ) and v̄ += dt Gᵀ (C₁ σ̄ - Cτ Q)
             for b in 1:nb, k in 1:nV
                 copyto!(Win[b][k], q[b][nV+k])

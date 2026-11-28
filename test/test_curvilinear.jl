@@ -636,7 +636,7 @@ cvpart(k) = !isdefined(Main, :TEST_PARTS) || isempty(Main.TEST_PARTS[]) || strin
         M = simulate(addfield(mesh, merge(base, (; vs=base.vs .- 1e-3 .* δv))); kw..., stations=sts, verbose=false)
         @test maximum(abs, δd.v .- (P.v .- M.v) ./ 2e-3) < 1e-6 * maximum(abs, δd.v)
     end
-    cvpart(2) && @testset "TTI: tilt 0 = VTI, tilt 90° = VTI with the axes swapped (2D P-SV, SH, 3D), guards" begin
+    cvpart(2) && @testset "TTI: tilt 0 = VTI, tilt 90° = VTI with the axes swapped (2D P-SV, SH, 3D), staggered grid: error" begin
         # a homogeneous medium, source and receivers on nodes, equal spacing in all directions, before any boundary wave:
         # tilting the axis to x (y) equals VTI with x (y) and z swapped (the interior stencils are the same in all directions)
         th = (; rho=2500.0, vp=4.0, vs=2.3, epsilon=0.25, delta=0.1, gamma=0.2, Qp=80.0, Qs=40.0)
@@ -680,13 +680,126 @@ cvpart(k) = !isdefined(Main, :TEST_PARTS) || isempty(Main.TEST_PARTS[]) || strin
         hy = run3(med3(tilt=90.0, azimuth=90.0), (; fy=1e15), st3((1, 3, 2)))       # y <-> z
         @test rel(hy.v[:, [1, 3, 2], :], v3.v) < 1e-4
         @test rel(run3(med3(tilt=40.0, azimuth=60.0), (; fz=1e15), st3((1, 2, 3))).v, v3.v) > 0.1
-        # guards: the staggered solver, gradients and Born
+        # the staggered solver: not supported
         flat = CartData(xyz_grid(-1:0.5:1, 0, -1:0.5:0))
         sm = addfield(flat, map(v -> v .* ones(size(flat.x.val)), merge(th, (; tilt=10.0))))
         @test_throws ErrorException simulate(sm; dt=0.01, nt=2, verbose=false, sources=ForceSource(0.0, 0.0, -0.5; fz=1.0))
-        @test_throws ErrorException born(med(tilt=10.0), med(); tmax=0.1, sources=ForceSource(x0, 0.0, z0; fz=1.0))
     end
 
+    cvpart(2) && @testset "TTI: misfit gradient (tilt, azimuth; attenuation, PML, SH) and Born against finite differences" begin
+        topog(x) = 1.2 * exp(-x^2 / 12)
+        mohog(x) = -4.0 + 0.6 * sin(2π * x / 10)
+        mesh = curvilinear_mesh(range(-8, 8, length=49), [topog, mohog]; dz=0.33, bottom=-10)
+        X, Z = mesh.x.val, mesh.z.val
+        low = Z .< mohog.(X)
+        base = (; rho=ifelse.(low, 2900.0, 2600.0), vp=ifelse.(low, 6.5, 5.5), vs=ifelse.(low, 3.75, 3.2), Qp=ifelse.(low, 300.0, 60.0),
+                Qs=ifelse.(low, 150.0, 30.0), epsilon=ifelse.(low, 0.05, 0.15), delta=ifelse.(low, 0.02, 0.06), gamma=ifelse.(low, 0.03, 0.1),
+                tilt=25 .* sin.(X ./ 3) .+ 10)
+        srcs = [DoubleCoupleSource(-2.0, 0.0, -5.0; Mw=4.0, strike=30, dip=60, rake=70, trise=1.0), ForceSource(2.0, 0.0, -2.5; fz=1e14, fy=1e14, trise=1.0)]
+        sts = [[Station("s$x", Float64(x), 0.0, 0.0; surface=true) for x in -6:3:6]; Station("d", 0.3, 0.0, -6.0)]
+        r0 = simulate(addfield(mesh, base); tmax=0.1, sources=srcs, T=Float64, verbose=false)
+        bump(c, s) = @. exp(-((X - c[1])^2 + (Z - c[2])^2) / s)
+        for (wave, absorber) in ((:psv, :impedance), (:sh, :pml))
+            kw = (; dt=r0.t[2] - r0.t[1], tmax=3.0, sources=srcs, T=Float64, wave, absorber, na=10)
+            obs = simulate(addfield(mesh, merge(base, (; vs=base.vs .* (1 .- 0.04 .* bump((0.5, -1), 3)), tilt=base.tilt .+ 8 .* bump((-1, -2), 4))));
+                           kw..., stations=sts, verbose=false)
+            J, g, _ = misfit_gradient(addfield(mesh, base), obs; kw..., checkpoint_steps=17)
+            @test haskey(g.fields, :tilt) && !haskey(g.fields, :azimuth)
+            Jof(m) = L2Misfit()(simulate(m; kw..., stations=sts, verbose=false).v, obs.v, obs.t)[1]
+            for (f, δ) in ((:tilt, 5 .* bump((0.5, -1.5), 4)), (:tilt, 5 .* bump((2, 0.3), 3)), (:vs, 0.02 .* base.vs .* bump((2, 0.2), 3)),
+                           (wave === :sh ? :gamma : :epsilon, 0.05 .* bump((-1, -2), 4)), (:Qs, 5 .* bump((1, -1), 4)))
+                ε = 1e-3
+                fd = (Jof(addfield(mesh, merge(base, (; f => base[f] .+ ε .* δ)))) - Jof(addfield(mesh, merge(base, (; f => base[f] .- ε .* δ))))) / 2ε
+                @test sum(g.fields[f] .* δ) ≈ fd rtol = 1e-6
+            end
+        end
+        kw = (; dt=r0.t[2] - r0.t[1], tmax=3.0, sources=srcs, stations=sts, T=Float64)
+        δ = (; tilt=6 .* bump((0.5, -2), 4), vs=0.08 .* bump((2, 0.2), 3), epsilon=0.05 .* bump((1, -1), 4))
+        b0, δd = born(addfield(mesh, base), addfield(mesh, δ); kw...)
+        ε = 1e-3
+        sp(s) = simulate(addfield(mesh, merge(base, NamedTuple{keys(δ)}(map(k -> base[k] .+ s .* δ[k], keys(δ))))); kw..., verbose=false)
+        P, M = sp(ε), sp(-ε)
+        @test maximum(abs, δd.v .- (P.v .- M.v) ./ 2ε) < 1e-6 * maximum(abs, δd.v)
+        # 3D: the Born seismograms and the gradient are transposes (tilt and azimuth)
+        mesh3 = curvilinear_mesh(range(-6, 6, length=33), range(-5, 5, length=29), [(x, y) -> 1.0 * exp(-(x^2 + y^2) / 10)]; dz=0.4, bottom=-8)
+        X3, Y3, Z3 = mesh3.x.val, mesh3.y.val, mesh3.z.val
+        o3 = ones(size(X3))
+        base3 = (; rho=2700 .* o3, vp=6.0 .* o3, vs=3.4 .* o3, Qp=200 .* o3, Qs=80 .* o3, epsilon=0.15 .* o3, delta=0.05 .* o3, gamma=0.1 .* o3,
+                 tilt=30 .+ 10 .* sin.(X3 ./ 3), azimuth=40 .+ 20 .* cos.(Y3 ./ 3))
+        srcs3 = [DoubleCoupleSource(-1.0, 0.5, -5.0; Mw=4.0, strike=30, dip=60, rake=70, trise=1.0)]
+        sts3 = [Station("s$x$y", Float64(x) + 0.1, Float64(y) - 0.1, 0.0; surface=true) for x in -4:2:4 for y in (-3, 0, 3)]
+        r3 = simulate(addfield(mesh3, base3); tmax=0.05, sources=srcs3, T=Float64, verbose=false)
+        kw3 = (; dt=r3.t[2] - r3.t[1], tmax=2.5, sources=srcs3, T=Float64)
+        bump3(c, s) = @. exp(-((X3 - c[1])^2 + (Y3 - c[2])^2 + (Z3 - c[3])^2) / s)
+        obs3 = simulate(addfield(mesh3, merge(base3, (; vs=base3.vs .* (1 .- 0.04 .* bump3((0.5, 0, -1), 3))))); kw3..., stations=sts3, verbose=false)
+        δ3 = (; tilt=6 .* bump3((0.5, 0, -2), 4), azimuth=10 .* bump3((-1, 1, -3), 4), vs=0.08 .* bump3((2, -1, 0.2), 3))
+        b3, δd3 = born(addfield(mesh3, base3), addfield(mesh3, δ3); kw3..., stations=sts3)
+        _, g3, _ = misfit_gradient(addfield(mesh3, base3), obs3; kw3...)
+        _, adj = L2Misfit()(b3.v, obs3.v, obs3.t)
+        @test sum(adj .* δd3.v) ≈ sum(k -> sum(g3.fields[k] .* δ3[k]), keys(δ3)) rtol = 1e-10
+    end
+    cvpart(2) && @testset "teleseismic waves in TTI layers: the anisotropic layer solver, TF/SF, gradient" begin
+        # isotropic layers: the anisotropic solver (Stroh) gives the isotropic field (P, SV, SH; oblique direction)
+        Lb = SW.Layers([0.0, 1500.0, 3000.0], [2300.0, 2400.0, 2800.0], [2300 * (3500.0^2 - 2 * 2000.0^2), 2400 * (4000.0^2 - 2 * 2300.0^2),
+                       2800 * (6000.0^2 - 2 * 3400.0^2)], [2300 * 2000.0^2, 2400 * 2300.0^2, 2800 * 3400.0^2])
+        La = SW.AnisoLayers(Lb.top, Lb.rho, [SW.tti_voigt(Lb.rho[j], sqrt((Lb.lam[j] + 2Lb.mu[j]) / Lb.rho[j]), sqrt(Lb.mu[j] / Lb.rho[j]), 0, 0, 0, 0, 0) for j in 1:3])
+        e = (cosd(200), sind(200))
+        for wave in (:p, :sv, :sh), ang in (0.0, 25.0)
+            p = sind(ang) / (wave === :p ? 6000.0 : 3400.0)
+            @test SW.aniso_incidence(La, wave, ang, e) ≈ p atol = 1e-15
+            W = [SW.aniso_layer_waves(La.rho[j], La.C[j], (p * e[1], p * e[2]), e) for j in 1:3]
+            fk = wave === :sh ? Val(:sh) : Val(:psv)
+            rot = SW.rotation(fk, e, (-e[2], e[1]))
+            for ω in (2π * 0.3, 2π * 1.7), z in (0.0, 800.0, 4500.0)
+                amp, Wi = SW.layer_amplitudes(Lb, p, wave, ω, fk)
+                f = SW.layer_field(Lb, amp, Wi, ω, z, fk)
+                iso = [sum((f[c] * a for (c, a) in rot[n]); init=0.0im) for n in (:Vx, :Vy, :Vz, :Sxx, :Syy, :Szz, :Syz, :Sxz, :Sxy)]
+                @test maximum(abs, iso .- SW.aniso_layer_field(La, SW.aniso_layer_amplitudes(La, W, wave, ω), W, ω, z)) < 1e-8 * maximum(abs, iso)
+            end
+        end
+        # TTI layers (2D): inside the box the exact background, outside nothing
+        th(low) = (; epsilon=ifelse.(low, 0.1, 0.2), delta=ifelse.(low, 0.03, 0.05), gamma=ifelse.(low, 0.08, 0.15), tilt=ifelse.(low, -20.0, 35.0))
+        mesh = curvilinear_mesh(range(-20, 20, length=201), [x -> 0.0, x -> -3.0]; dz=0.2, bottom=-25)
+        low = mesh.z.val .< -3.0
+        m = addfield(mesh, merge((; rho=ifelse.(low, 2800.0, 2400.0), vp=ifelse.(low, 6.0, 4.0), vs=ifelse.(low, 3.4, 2.3)), th(low)))
+        C(ρ, vp, vs, l) = SW.tti_voigt(ρ, vp, vs, l ? 0.1 : 0.2, l ? 0.03 : 0.05, l ? 0.08 : 0.15, deg2rad(l ? -20.0 : 35.0), 0.0)
+        L = SW.AnisoLayers([0.0, 3000.0], [2400.0, 2800.0], [C(2400.0, 4000.0, 2300.0, false), C(2800.0, 6000.0, 3400.0, true)])
+        for (wave, comps) in ((:sv, ((1, :Vx, 1), (2, :Vz, -1))), (:sh, ((1, :Vy, 1),)))
+            w = TeleseismicWave(wave; angle=20.0, box=(-8.0, 8.0, -12.0), backazimuth=270.0, t0=1.0, trise=2.0)
+            r = simulate(m; grid=:curvilinear, wave=wave === :sh ? :sh : :psv, tmax=9.0, sources=w, T=Float64, verbose=false, absorber=:pml,
+                         stations=[Station("in", 2.0, 0.0, 0.0; surface=true), Station("out", 14.0, 0.0, 0.0; surface=true)])
+            p = SW.aniso_incidence(L, wave, 20.0, (1.0, 0.0))
+            inc = 3 + (wave === :sv ? 2 : 3)
+            ηs = [abs(real(SW.aniso_layer_waves(L.rho[j], L.C[j], (p, 0.0), (1.0, 0.0))[1][inc])) for j in 1:2]
+            tshift = w.t0 - p * (-8000.0) - SW.vertical_delay(L, ηs, 12000.0)
+            tab = SW.teleseismic_tables_cv(w, L, (p, 0.0), (1.0, 0.0), [0.0], Tuple(c[2] for c in comps), -5.0, 14.0, 1e-3, :kupper, Float64)[1]
+            exact(nm, x, t) = (f = (t - tshift - p * 1e3x + 5.0) / 1e-3; j = floor(Int, f); a = f - j; A = getfield(tab, nm); (1 - a) * A[j+1, 1] + a * A[j+2, 1])
+            for (c, nm, sg) in comps
+                ex = [sg * exact(nm, 2.0, t) for t in r.t]
+                @test maximum(abs, r.v[:, c, 1] .- ex) < 0.005 * maximum(abs, ex)
+            end
+            @test maximum(abs, r.v[:, :, 2]) < 1e-3 * maximum(abs, r.v[:, :, 1])
+        end
+        # gradient (tilt, Thomsen; inside the box and on its boundary, there tiny)
+        mesh = curvilinear_mesh(range(-14, 14, length=141), [x -> 0.0, x -> -3.0]; dz=0.2, bottom=-16)
+        X, Z = mesh.x.val, mesh.z.val
+        low = Z .< -3.0
+        body = @. exp(-((X - 1)^2 + (Z + 4)^2) / 1)
+        base = merge((; rho=ifelse.(low, 2800.0, 2400.0), vp=ifelse.(low, 6.0, 4.0) .* (1 .- 0.05 .* body), vs=ifelse.(low, 3.4, 2.3) .* (1 .- 0.05 .* body)),
+                     th(low), (; tilt=ifelse.(low, -20.0, 35.0) .+ 10 .* body))
+        bump(c, s) = @. exp(-((X - c[1])^2 + (Z - c[2])^2) / s)
+        w = TeleseismicWave(:sv; angle=20.0, box=(-6.0, 6.0, -9.0), backazimuth=270.0, t0=0.3, trise=1.0)
+        sts = [Station("s$x", Float64(x), 0.0, 0.0; surface=true) for x in -5:2:5]
+        r0 = simulate(addfield(mesh, base); grid=:curvilinear, tmax=0.05, sources=w, T=Float64, verbose=false)
+        kw = (; grid=:curvilinear, dt=r0.t[2] - r0.t[1], tmax=5.0, sources=w, T=Float64, absorber=:pml, na=10)
+        obs = simulate(addfield(mesh, merge(base, (; vs=base.vs .* (1 .- 0.03 .* body)))); kw..., stations=sts, verbose=false)
+        J, g, _ = misfit_gradient(addfield(mesh, base), obs; kw...)
+        Jof(mm) = L2Misfit()(simulate(mm; kw..., stations=sts, verbose=false).v, obs.v, obs.t)[1]
+        for (f, δ, ε) in ((:tilt, 5 .* bump((0, -2), 2), 1e-3), (:epsilon, 0.05 .* bump((0, -9), 0.3), 1e-6), (:tilt, 5 .* bump((6, -4), 0.3), 1e-6))
+            fd = (Jof(addfield(mesh, merge(base, (; f => base[f] .+ ε .* δ)))) - Jof(addfield(mesh, merge(base, (; f => base[f] .- ε .* δ))))) / 2ε
+            @test sum(g.fields[f] .* δ) ≈ fd rtol = 1e-5
+        end
+    end
     cvpart(1) && @testset "teleseismic waves (TF/SF injection): exact background, gradient" begin
         # a layer over a half-space: inside the box the total field is the background (exact, layered), outside nothing
         Lb = SW.Layers([0.0, 3000.0], [2400.0, 2800.0], [2400 * (4000.0^2 - 2 * 2300.0^2), 2800 * (6000.0^2 - 2 * 3400.0^2)],

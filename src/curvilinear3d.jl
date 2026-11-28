@@ -608,8 +608,9 @@ function simulate_curvilinear3d(model::Union{CartData,DistributedModel}; dt=noth
         return tab
     end
     # teleseismic wave: total-field / scattered-field corrections at the nodes near the box boundary
-    column(ig, jg) = (cz = model_columns(model, ig:ig, jg:jg, 3); (vec(1e3 .* cz[1]),
-                      [(Float64(cz[2].rho[1, 1, q]) * (density_unit === :g_cm3 ? 1e3 : 1.0), 1e3cz[2].vp[1, 1, q], 1e3cz[2].vs[1, 1, q]) for q in axes(cz[1], 3)]))
+    column(ig, jg) = (cz = model_columns(model, ig:ig, jg:jg, 3); fz(k, q) = haskey(cz[2], k) ? Float64(cz[2][k][1, 1, q]) : 0.0;
+                      (vec(1e3 .* cz[1]), [(Float64(cz[2].rho[1, 1, q]) * (density_unit === :g_cm3 ? 1e3 : 1.0), 1e3cz[2].vp[1, 1, q], 1e3cz[2].vs[1, 1, q],
+                                            fz(:epsilon, q), fz(:delta, q), fz(:gamma, q), deg2rad(fz(:tilt, q)), deg2rad(fz(:azimuth, q))) for q in axes(cz[1], 3)]))
     TW, ntw = isempty(tws) ? (nothing, 0) :
               teleseismic_cv(tws[1], 3, false, (; hostblocks, gx, nx, ia, ib, ow, ox, gy, ny, ja, jb, owy, oy, dev, FT, dt, nt, tbeg, stf, aniso,
                                                  blocks, na, pml, column, rows, loc=A -> A[xr .- ow, yr .- owy, :]))[1:2]

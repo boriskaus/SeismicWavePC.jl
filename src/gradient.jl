@@ -24,7 +24,7 @@ a source or a vector of sources) the misfits and model gradients of all shots ar
 - `kwargs` are those of [`simulate`](@ref) (`dt`, `nt`, `stf`, `record_every`, `absorber`, `T`, `backend`, `nproc`, …) and
   must describe the simulation that `observed` is compared with.
 - `gradient`: a `CartData` on the grid of `model` with the fields `rho`, `vp`, `vs`, `Qp`, `Qs` (VTI models: also
-  `epsilon`, `delta`, `gamma`): ∂J/∂ of the model field in its units (per kg/m³ (or g/cm³ with `density_unit = :g_cm3`), per km/s, per unit Q). Cells in the absorbing layers are
+  `epsilon`, `delta`, `gamma`; TTI models: also `tilt` (and `azimuth` in 3D), per degree): ∂J/∂ of the model field in its units (per kg/m³ (or g/cm³ with `density_unit = :g_cm3`), per km/s, per unit Q). Cells in the absorbing layers are
   homogenized in the simulation, so their sensitivity is added to the cells next to the layers.
 - `source_gradients`: one entry per source (per shot: a vector of them), `nothing` for plane waves and ignored sources:
   - moment tensors: `M` (∂J/∂ of the six components `M0 .* M` [per N m]), `M0` (at fixed `M`);
