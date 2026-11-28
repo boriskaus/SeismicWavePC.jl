@@ -11,7 +11,7 @@
 # computes the strain on the mesh and the elastic plane-strain stress (λ, μ of the model; the small dispersion of Q is
 # neglected) and the running maxima.
 #
-#   julia -t auto --project=examples/matterhorn examples/matterhorn/matterhorn_fig7.jl [dx_km] [cpu|metal]
+#   julia -t auto --project=examples/matterhorn examples/matterhorn/matterhorn_fig7.jl [dx_km] [cpu|metal] [z0|halfspace] [plus|minus]
 #
 using SeismicWavePC, GeophysicalModelGenerator, CairoMakie, Serialization, Printf
 include("model.jl")
@@ -20,6 +20,11 @@ const DEVICE = length(ARGS) >= 2 ? ARGS[2] : "cpu"
 DEVICE == "metal" && using Metal
 const BACKEND, FT = DEVICE == "metal" ? (MetalBackend(), Float32) : (CPU(), Float64)
 const NA7, TMAX7, DT_CB = 20, 25.0, 0.01
+# The angle of the oblique waves: `TeleseismicWave`'s angle is the incidence in the half-space below the box (vp 6 km/s);
+# the paper tilts its source plane by 45° at z = 0 (vp(0) = 5.07 km/s). "z0": 45° at z = 0, i.e. asin(sin 45° · vp(Z_BOT)/vp(0))
+# = 56.7° in the half-space (Snell; the same for SV, as vp/vs is constant); "halfspace": 45° in the half-space.
+const ANGLE_AT = length(ARGS) >= 3 ? ARGS[3] : "z0"
+const A45 = ANGLE_AT == "z0" ? asind(sind(45) * vp_of(Z_BOT - 1.0) / vp_of(0.0)) : 45.0
 const SIG7 = 0.1                                                  # DEM smoothing [km]: a fixed scale, independent of dx
 
 mesh, model, sec = section_model(DX7, NA7; σ=SIG7)
@@ -58,9 +63,33 @@ function dxdz(f)
     return (fi .* ZK .- fk .* ZI) ./ JAC, (fk .* XI .- fi .* XK) ./ JAC
 end
 
-"The peaks of |v_h|, |v_z| and dQ for the plane waves of `wave` (angle, backazimuth), P + 1.7 SV."
+"Running maxima of |v_h|, |v_z| and dQ, updated with the velocities `vx`, `vz` of one snapshot (interval `h`)."
+mutable struct Peaks
+    ux::Matrix{Float64}; uz::Matrix{Float64}; vxo::Matrix{Float64}; vzo::Matrix{Float64}
+    vh::Matrix{Float64}; vv::Matrix{Float64}; dq::Matrix{Float64}
+end
+Peaks() = Peaks((zeros(size(Xr)) for _ in 1:7)...)
+function update!(q::Peaks, vx, vz, h)
+    q.ux .+= (vx .+ q.vxo) .* (h / 2); q.uz .+= (vz .+ q.vzo) .* (h / 2)
+    q.vxo .= vx; q.vzo .= vz
+    q.vh .= max.(q.vh, abs.(vx)); q.vv .= max.(q.vv, abs.(vz))
+    uxx, uxz = dxdz(q.ux); uzx, uzz = dxdz(q.uz)
+    sxx = (λ .+ 2μ) .* uxx .+ λ .* uzz
+    szz = λ .* uxx .+ (λ .+ 2μ) .* uzz
+    sxz = μ .* (uxz .+ uzx)
+    syy = ν .* (sxx .+ szz)
+    P = -(sxx .+ syy .+ szz) ./ 3
+    J2 = ((sxx .+ P) .^ 2 .+ (syy .+ P) .^ 2 .+ (szz .+ P) .^ 2 .+ 2 .* sxz .^ 2) ./ 2
+    q.dq .= max.(q.dq, sqrt.(J2))
+    return q
+end
+
+"""
+The peaks of |v_h|, |v_z| and dQ for P and SV plane waves (angle in the half-space, backazimuth), for both relative
+polarities, P + 1.7 SV (`plus`) and P - 1.7 SV (`minus`; the paper does not state it), from the same snapshots.
+"""
 function peaks(angle, baz)
-    file = joinpath(@__DIR__, "..", "data", "matterhorn_fig7_$(round(Int, angle))_$(round(Int, baz))_$(round(Int, 1e3DX7))m_s$(round(Int, 1e3SIG7)).jls")
+    file = joinpath(@__DIR__, "..", "data", "matterhorn_fig7_$(round(Int, angle))_$(round(Int, baz))_$(round(Int, 1e3DX7))m_s$(round(Int, 1e3SIG7))_pm.jls")
     isfile(file) && return deserialize(file)
     stf = ormsby_stf()
     box = (-BOX, BOX, Z_BOT)
@@ -73,37 +102,27 @@ function peaks(angle, baz)
     store = Vector{NTuple{2,Matrix{Float32}}}()
     simulate(model; kw..., sources=TeleseismicWave(:p; angle, backazimuth=baz, box, trise=1.0), snapshot_every=every,
              callback=(d, t) -> push!(store, (Float32.(d.fields.V[1][I, 1, K]), Float32.(d.fields.V[3][I, 1, K]))))
-    ux, uz = zeros(size(Xr)), zeros(size(Xr))
-    vxo, vzo = zeros(size(Xr)), zeros(size(Xr))
-    vh, vv, dq = zeros(size(Xr)), zeros(size(Xr)), zeros(size(Xr))
+    qp, qm = Peaks(), Peaks()
     n = Ref(0)
     function cb(d, t)
         n[] += 1
         n[] > length(store) && return
-        vx = store[n[]][1] .+ 1.7 .* d.fields.V[1][I, 1, K]
-        vz = store[n[]][2] .+ 1.7 .* d.fields.V[3][I, 1, K]
-        h = every * dt
-        ux .+= (vx .+ vxo) .* (h / 2); uz .+= (vz .+ vzo) .* (h / 2)
-        vxo .= vx; vzo .= vz
-        vh .= max.(vh, abs.(vx)); vv .= max.(vv, abs.(vz))
-        uxx, uxz = dxdz(ux); uzx, uzz = dxdz(uz)
-        sxx = (λ .+ 2μ) .* uxx .+ λ .* uzz
-        szz = λ .* uxx .+ (λ .+ 2μ) .* uzz
-        sxz = μ .* (uxz .+ uzx)
-        syy = ν .* (sxx .+ szz)
-        P = -(sxx .+ syy .+ szz) ./ 3
-        J2 = ((sxx .+ P) .^ 2 .+ (syy .+ P) .^ 2 .+ (szz .+ P) .^ 2 .+ 2 .* sxz .^ 2) ./ 2
-        dq .= max.(dq, sqrt.(J2))
+        sx, sz = 1.7 .* d.fields.V[1][I, 1, K], 1.7 .* d.fields.V[3][I, 1, K]
+        update!(qp, store[n[]][1] .+ sx, store[n[]][2] .+ sz, every * dt)
+        update!(qm, store[n[]][1] .- sx, store[n[]][2] .- sz, every * dt)
     end
     time = @elapsed simulate(model; kw..., sources=TeleseismicWave(:sv; angle, backazimuth=baz, box, trise=1.0), snapshot_every=every, callback=cb)
-    res = (; vh, vv, dq, every, dt, nsnap=length(store))
+    res = (; plus=(; vh=qp.vh, vv=qp.vv, dq=qp.dq), minus=(; vh=qm.vh, vv=qm.vv, dq=qm.dq), every, dt, nsnap=length(store))
     serialize(file, res)
-    @printf("angle %2.0f°, backazimuth %3.0f°: %d snapshots every %d steps (dt = %.3f ms), SV run %.0f s\n", angle, baz, length(store), every, 1e3dt, time)
+    @printf("angle %5.2f°, backazimuth %3.0f°: %d snapshots every %d steps (dt = %.3f ms), SV run %.0f s\n", angle, baz, length(store), every, 1e3dt, time)
     return res
 end
 
-cases = [(0.0, 270.0, "vertical incidence"), (45.0, 90.0, "45° from the north"), (45.0, 270.0, "45° from the south")]
-R = [peaks(a, b) for (a, b, _) in cases]
+cases = [(0.0, 270.0, "vertical incidence"), (A45, 90.0, "45° from the north"), (A45, 270.0, "45° from the south")]
+@printf("oblique waves: %.2f° in the half-space (%s)\n", A45, ANGLE_AT == "z0" ? "45° at z = 0" : "45° in the half-space")
+const POL = length(ARGS) >= 4 ? Symbol(ARGS[4]) : :plus          # :plus (P + 1.7 SV) or :minus (P - 1.7 SV)
+RR = [peaks(a, b) for (a, b, _) in cases]
+R = [getfield(r, POL) for r in RR]
 
 # --- numbers: scaled to the scenarios (summit horizontal PGV 1 and 30 cm/s)
 top = size(Xr, 2)
@@ -159,5 +178,5 @@ for (j, ((a, b, lab), r, s)) in enumerate(zip(cases, R, s_all))
         arrows2d!(ax, x0, fill(2.9, length(x0)), fill(dir * 0.25, length(x0)), fill(0.25, length(x0)), color=:white)
     end
 end
-save(joinpath(@__DIR__, "matterhorn_fig7_$(round(Int, 1e3DX7))m_s$(round(Int, 1e3SIG7)).png"), fig)
-println("saved matterhorn_fig7_$(round(Int, 1e3DX7))m_s$(round(Int, 1e3SIG7)).png")
+save(joinpath(@__DIR__, "matterhorn_fig7_$(round(Int, 1e3DX7))m_s$(round(Int, 1e3SIG7))_$(ANGLE_AT)_$(POL).png"), fig)
+println("saved matterhorn_fig7_$(round(Int, 1e3DX7))m_s$(round(Int, 1e3SIG7))_$(ANGLE_AT)_$(POL).png")

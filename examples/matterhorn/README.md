@@ -107,5 +107,22 @@ flanks rather than concentrated on the southern one. Possible reasons: the polar
 (not given in the paper), the smoothing of the topography, and the paper's source plane (forces on the z = 0 plane in the
 whole model versus a box injection here).
 
+**Resolution of the two simulations.** The paper (Salvus, spectral elements of order 4) resolves the wavefield with at
+least 2 elements per minimum wavelength (λmin ≈ 504 m: vs = 1765 m/s at the summit, 3.5 Hz), elements smaller than 200 m
+in 3D; for the 2D section no size is given, and the mesh lines of its Fig. S2 are ≈ 60 m apart (counted: 81 px per km,
+lines 4.5-6 px apart; ≈ 240 m elements if these are the GLL sub-cells of order-4 elements, as their uneven spacing
+suggests). Its DEM is "slightly" Gaussian-smoothed (amount not given), and no convergence test is reported. (The vp colour
+bar of Fig. S2 ends at 5000 m/s, while the text gives 6000 m/s at −2 km: probably a clipped scale.) Here: curvilinear
+SBP-SAT with 7th-order upwind operators, 40 m node spacing (12.6 nodes per λmin), DEM smoothed with σ = 100 m; converged: a
+30 m run changes the surface dQ maxima by 1-3 kPa (≤ 10 %; maxima 36/47/38 vs 36/46/37 kPa, scenario A; 30 m check at the
+original angle). Without that smoothing (σ = 40 m) the stresses at the sharp north-side corner changed with the grid
+(60 m vs 40 m: up to 2×), hence σ = 100 m.
+
+**Angle convention:** `TeleseismicWave`'s `angle` is the incidence in the half-space below the box (vp = 6 km/s). The paper
+tilts its source plane by 45° at z = 0 (vp(0) = 5.07 km/s); the oblique runs therefore use asin(sin 45° · 6/5.07) = 56.7°
+in the half-space, i.e. 45° at z = 0 (Snell; the same for SV, vp/vs being constant), about 31° at the base of the
+mountain (`matterhorn_fig7.jl ... z0`, the default; `halfspace`: 45° in the half-space, about 26° at the base). The
+panels use equal scales in x and z, as the paper's.
+
 Colour maps as the paper's colour bars (sampled from its figure): `:batlowW` for the ground velocity and `:vik` for dQ,
 both linear (`fig7_paper_style.jl`).

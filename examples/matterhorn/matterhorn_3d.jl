@@ -6,14 +6,14 @@
 # Stations: north-south and east-west profiles across the summit (5 km, 100 m apart) and a 250 m grid over 10 km × 10 km
 # (the amplification map), all on the surface. Results are cached in examples/data/.
 #
-#   julia -t auto --project=examples/matterhorn examples/matterhorn/matterhorn_3d.jl [metal|cpu] [dx_km] [flat]
+#   julia -t auto --project=examples/matterhorn examples/matterhorn/matterhorn_3d.jl [metal|cpu] [dx_km] [flat|ridges]
 #
 using SeismicWavePC, GeophysicalModelGenerator, Serialization, Printf
 const DEVICE = length(ARGS) >= 1 ? ARGS[1] : "metal"
 DEVICE == "metal" && using Metal
 const backend = DEVICE == "metal" ? MetalBackend() : CPU()
 const DX = length(ARGS) >= 2 ? parse(Float64, ARGS[2]) : 0.075
-const FLAT = length(ARGS) >= 3 && ARGS[3] == "flat"
+const FLAT = length(ARGS) >= 3 && ARGS[3] == "flat"            # "ridges": the stations of Fig. S4 instead
 include("model.jl")
 
 const NA = 12                                                     # PML nodes
@@ -29,17 +29,23 @@ function matterhorn_stations()
     return [prof; grid]
 end
 
-function run3d(; dx=DX, flat=FLAT)
+"""
+Stations along the two ridge profiles of Fig. S4 of the paper (through the summit; read from its map): NW-SE along
+x = -0.885 y (distance: the northing offset) and WSW-ENE along y = 0.39 x (the easting offset), 100 m apart, ±2.5 km.
+"""
+ridge_stations() = [[Station(@sprintf("RNS%+05d", round(Int, 1e3d)), -0.885d, d, 0.0; surface=true) for d in -2.5:0.1:2.5];
+                    [Station(@sprintf("REW%+05d", round(Int, 1e3d)), d, 0.39d, 0.0; surface=true) for d in -2.5:0.1:2.5]]
+
+function run3d(; dx=DX, flat=FLAT, stations=matterhorn_stations(), tag="")
     margin = (NA + SeismicWavePC.SBP_NB + 10) * dx
     L = BOX + margin
     n = round(Int, 2L / dx) + 1
     bottom = Z_BOT - (NA + SeismicWavePC.SBP_NB + 12) * 0.75dx
     mesh = matterhorn_mesh(range(-L, L, length=n), range(-L, L, length=n), matterhorn_surface(; flat); dz=0.75dx, bottom)
     model = matterhorn_model(mesh, dx)
-    stations = matterhorn_stations()
     @printf("mesh %d × %d × %d = %.1f M nodes (dx = %.0f m, bottom %.2f km)\n", size(mesh)..., prod(size(mesh)) / 1e6, 1e3dx, bottom)
     for (wave, baz, name) in WAVES
-        file = joinpath(@__DIR__, "..", "data", "matterhorn3d_$(name)_$(round(Int, 1e3dx))m$(flat ? "_flat" : "").jls")
+        file = joinpath(@__DIR__, "..", "data", "matterhorn3d_$(tag)$(name)_$(round(Int, 1e3dx))m$(flat ? "_flat" : "").jls")
         isfile(file) && (println("have $file"); continue)
         w = TeleseismicWave(wave; angle=0.0, backazimuth=baz, box=(-BOX, BOX, -BOX, BOX, Z_BOT), t0=0.0, trise=TRISE, amplitude=1.0)
         time = @elapsed r = simulate(model; grid=:curvilinear, tmax=TMAX, sources=w, stations, stf=:gaussian, absorber=:pml, na=NA,
@@ -51,4 +57,6 @@ function run3d(; dx=DX, flat=FLAT)
     end
 end
 
-run3d()
+if abspath(PROGRAM_FILE) == @__FILE__
+    length(ARGS) >= 3 && ARGS[3] == "ridges" ? run3d(; flat=false, stations=ridge_stations(), tag="ridges_") : run3d()
+end

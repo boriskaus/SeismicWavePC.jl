@@ -13,29 +13,35 @@ const NA2 = 20
 const T2 = 25.0
 
 
-"Material with a permafrost cap: nodes less than thick·w below the surface (w: 0 at 2.9 km, 1 at the summit)."
+"""
+Material with a permafrost cap (velocities × fv, density × 1.1, as in Fig. 6A of the paper): the nodes less than thick·w
+below the surface, w = 0 at 2.9 km height and 1 at the summit of the section (its highest point): `thick` below the
+summit, thinning to 0 towards the valleys (the paper shows the permafrost bodies only as a sketch).
+"""
 function permafrost!(model, mesh, sec, thick, fv)
     X, Z = mesh.x.val, mesh.z.val
     zs = sec.(X)
-    w = clamp.((zs .- 2.9) ./ (Z_TOP - 2.9), 0, 1)
+    w = clamp.((zs .- 2.9) ./ (maximum(zs) - 2.9), 0, 1)
     frozen = (zs .- Z) .< thick .* w
     f = model.fields
     return addfield(mesh, (; rho=ifelse.(frozen, 1.1 .* f.rho, f.rho), vp=ifelse.(frozen, fv .* f.vp, f.vp),
-                          vs=ifelse.(frozen, fv .* f.vs, f.vs), Qp=f.Qp, Qs=f.Qs))
+                          vs=ifelse.(frozen, fv .* f.vs, f.vs), Qp=f.Qp, Qs=f.Qs)), frozen
 end
 
 function run2d(thick, fv)
-    file = joinpath(@__DIR__, "..", "data", "matterhorn2d_$(round(Int, 1e3thick))m_$(round(Int, 100fv))_$(round(Int, 1e3DX2))m.jls")
+    file = joinpath(@__DIR__, "..", "data", thick > 0 ? "matterhorn2d_pf_$(round(Int, 1e3thick))m_$(round(Int, 100fv))_$(round(Int, 1e3DX2))m.jls" :
+                                                       "matterhorn2d_0m_100_$(round(Int, 1e3DX2))m.jls")
     isfile(file) && return deserialize(file)
     mesh, model, sec = section_model(DX2, NA2)
-    thick > 0 && (model = permafrost!(model, mesh, sec, thick, fv))
+    thick > 0 && (model = permafrost!(model, mesh, sec, thick, fv)[1])
     stations = [Station(@sprintf("S%+05d", round(Int, 1e3x)), x, 0.0, 0.0; surface=true) for x in -4:0.1:4]
     v = map((:p, :sv)) do wave
         w = TeleseismicWave(wave; angle=0.0, backazimuth=270.0, box=(-BOX, BOX, Z_BOT), t0=0.0, trise=0.5, amplitude=1.0)
-        r = simulate(model; grid=:curvilinear, tmax=T2, sources=w, stations, stf=:gaussian, absorber=:pml, na=NA2, T=Float64, verbose=false)
-        (r.t, r.v)
+        time = @elapsed r = simulate(model; grid=:curvilinear, tmax=T2, sources=w, stations, stf=:gaussian, absorber=:pml, na=NA2, T=Float64, verbose=false)
+        (r.t, r.v, time)
     end
-    res = (; t=v[1][1], v=v[1][2] .+ 1.7 .* v[2][2], vp=v[1][2], vsv=v[2][2], x=[s.x for s in stations], names=[s.name for s in stations])
+    res = (; t=v[1][1], v=v[1][2] .+ 1.7 .* v[2][2], vp=v[1][2], vsv=v[2][2], x=[s.x for s in stations], names=[s.name for s in stations],
+           nodes=prod(size(mesh)), time=v[1][3] + v[2][3], threads=Threads.nthreads())
     mkpath(dirname(file)); serialize(file, res)
     @printf("2D, permafrost %.0f m × %.1f: %d nodes, %d steps\n", 1e3thick, fv, prod(size(mesh)), length(res.t))
     return res
@@ -49,6 +55,7 @@ function spectrum(v, dt; w=0.05)
     return f, [sum(A[max(1, i - k):min(end, i + k)]) / length(max(1, i - k):min(length(A), i + k)) for i in eachindex(A)]
 end
 
+if abspath(PROGRAM_FILE) == @__FILE__          # (the analysis; the functions above are also used by the Fig. 6 scripts)
 cases = [(0.0, 1.0, "no permafrost (model 5)"), (0.6, 1.3, "600 m, +30 % (model 1)"), (0.6, 1.5, "600 m, +50 %")]
 R = Dict((th, fv) => run2d(th, fv) for (th, fv, _) in cases)
 r0 = R[(0.0, 1.0)]
@@ -89,3 +96,4 @@ for ax in (axh, axv); xlims!(ax, 0, 4); end
 axislegend(axh, position=:rt)
 save(joinpath(@__DIR__, "matterhorn_2d_spectra.png"), fig)
 println("saved matterhorn_2d_spectra.png")
+end
