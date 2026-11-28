@@ -76,13 +76,14 @@ function teleseismic_cv(w::TeleseismicWave, N, sh, c)
     pmax = sum(ntuple(a -> max(pv[a] * ext[a][1], pv[a] * ext[a][2]), Val(N - 1)))
     τ0 = min(tbeg - tshift - pmax - 2dt, -(vertical_delay(L, ηs, 0.0) - vertical_delay(L, ηs, dmax)) - 2w.trise)
     τ1 = tbeg + (nt + 1) * dt - tshift - pmin + 2dt
-    dτ = table_step(w, stf, τ0, τ1, dt)
+    fcap = grid_fcap(L, minimum(diff(gx)))             # (gx [m], L in SI)
+    dτ = table_step(w, stf, τ0, τ1, dt; fcap)
     fk = w.wave === :sh ? Val(:sh) : Val(:psv)
     e = N == 2 ? (e3[1], 0.0) : e3
     θ = N == 2 ? (0.0, e3[1]) : (-e3[2], e3[1])
     rot = rotation(fk, e, θ)
     names = sh ? (:Vy, :Syz, :Sxy) : N == 2 ? (:Vx, :Vz, :Sxx, :Szz, :Sxz) : (:Vx, :Vy, :Vz, :Sxx, :Syy, :Szz, :Syz, :Sxz, :Sxy)
-    tabs = teleseismic_tables_cv(w, fk, rot, p, L, zt, names, τ0, τ1, dτ, stf, FT)
+    tabs = teleseismic_tables_cv(w, fk, rot, p, L, zt, names, τ0, τ1, dτ, stf, FT; fcap)
     # z up: vz, σxz, σyz change sign (the tables: z down)
     flip = map(n -> n in (:Vz, :Sxz, :Syz) ? -one(FT) : one(FT), NamedTuple{names}(names))
     # the nodes to correct (owned): a stencil (±4) reaches across the box boundary
@@ -131,12 +132,12 @@ function teleseismic_cv(w::TeleseismicWave, N, sh, c)
 end
 
 "Tables `tab[name][iτ, iz]` of the incoming field at the depths `zt` [m] and delay times `τ0 + (iτ - 1) dτ` (SI; z down)."
-function teleseismic_tables_cv(w, fk::Val{m}, rot, p, L, zt, names, τ0, τ1, dτ, stf, ::Type{T}) where {m,T}
+function teleseismic_tables_cv(w, fk::Val{m}, rot, p, L, zt, names, τ0, τ1, dτ, stf, ::Type{T}; fcap=Inf) where {m,T}
     wave = m === :sh ? :sh : w.wave
     N = nextpow(2, ceil(Int, 2(τ1 - τ0) / dτ))
     S = rfft([w.amplitude * moment_rate(stf, t, 0.0, w.trise) for t in τ0 .+ (0:N-1) .* dτ])
     ω = 2π .* (0:N÷2) ./ (N * dτ)
-    keep = findall(>(1e-9 * maximum(abs, S)), abs.(S))
+    keep = table_band(S, ω, fcap)
     G = Dict(n => zeros(ComplexF64, length(keep), length(zt)) for n in names)
     for (iq, q) in enumerate(keep)
         amp, Wl = layer_amplitudes(L, p, wave, ω[q], fk)

@@ -255,15 +255,33 @@ function time_table(G::Matrix{ComplexF64}, keep, N, nτ, scale, ::Type{T})::Matr
 end
 
 """
-The time step of the injection tables: `dt/4`, or coarser for a band-limited source, 1/(100 fmax) with `fmax` the highest
-frequency of its spectrum above 1e-9 of the maximum, when that is larger (linear interpolation in time: relative error
-≤ (2π f dτ)²/8, ≤ 5e-4 at fmax, where the source is negligible). Long simulations otherwise need GB-sized tables.
+The frequencies (indices into the spectrum `S` at the angular frequencies `ω`) of the injection tables: those where the
+source spectrum exceeds 1e-9 of its maximum, up to `fcap` [Hz]. (A sampled source, linearly interpolated, keeps ~1e-5 of
+its peak up to the Nyquist frequency of its sampling: thousands of frequencies that the grid cannot carry.)
 """
-function table_step(w::TeleseismicWave, stf, τ0, τ1, dt)
+table_band(S, ω, fcap) = (m = maximum(abs, S); findall(q -> abs(S[q]) > 1e-9m && ω[q] <= 2π * fcap, eachindex(S)))
+
+"""
+The highest frequency [Hz] that a grid with the node spacing `h` carries for the slowest wave of the layers `L` (shear,
+or P in fluid layers): its spatial Nyquist frequency v/(2h) (the units of `L` and `h` must match). Higher frequencies
+of the source only inject grid noise (fewer than 2 nodes per wavelength).
+"""
+function grid_fcap(L, h)
+    v = minimum(j -> L.mu[j] > 0 ? sqrt(L.mu[j] / L.rho[j]) : sqrt(L.lam[j] / L.rho[j]), eachindex(L.rho))
+    return v / 2h
+end
+
+"""
+The time step of the injection tables: `dt/4`, or coarser for a band-limited source, 1/(100 fmax) with `fmax` the highest
+frequency of the tables (`table_band`), when that is larger (linear interpolation in time: relative error ≤ (2π f dτ)²/8,
+≤ 5e-4 at fmax). Long simulations otherwise need GB-sized tables.
+"""
+function table_step(w::TeleseismicWave, stf, τ0, τ1, dt; fcap=Inf)
     dτ = dt / 4
     N = nextpow(2, ceil(Int, 2(τ1 - τ0) / dτ))
-    S = abs.(rfft([w.amplitude * moment_rate(stf, t, 0.0, w.trise) for t in τ0 .+ (0:N-1) .* dτ]))
-    fmax = (findlast(>(1e-9 * maximum(S)), S) - 1) / (N * dτ)
+    S = rfft([w.amplitude * moment_rate(stf, t, 0.0, w.trise) for t in τ0 .+ (0:N-1) .* dτ])
+    keep = table_band(S, 2π .* (0:N÷2) ./ (N * dτ), fcap)
+    fmax = isempty(keep) ? 0.0 : (keep[end] - 1) / (N * dτ)
     return fmax > 0 ? max(dτ, 1 / (100fmax)) : dτ
 end
 
@@ -278,7 +296,7 @@ function injection_tables(w::TeleseismicWave, ::Val{mode}, fk::Val{m}, rot, p, L
     N = nextpow(2, ceil(Int, 2(τ1 - τ0) / dτ))               # twice the span: no wrap-around of late reverberations
     S = rfft([w.amplitude * moment_rate(stf, t, 0.0, w.trise) for t in τ0 .+ (0:N-1) .* dτ])
     ω = 2π .* (0:N÷2) ./ (N * dτ)
-    keep = findall(>(1e-9 * maximum(abs, S)), abs.(S))
+    keep = table_band(S, ω, grid_fcap(L, minimum(g.d)))     # (L, g.d: km and km/s)
     comps = injection_components(Val(mode))
     names = keys(comps)
     depth(k, face) = (face ? g.zf[k] : g.zc[k]) - zs
