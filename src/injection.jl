@@ -243,24 +243,28 @@ spectrum per depth needs tens of GB for long simulations.)
 function time_table(G::Matrix{ComplexF64}, keep, N, nτ, scale, ::Type{T})::Matrix{T} where {T}
     A = Matrix{T}(undef, nτ, size(G, 2))
     spec = zeros(ComplexF64, N ÷ 2 + 1)
+    buf = Vector{Float64}(undef, N)
+    P = plan_irfft(spec, N)                               # (one plan and buffer: no GB of garbage from long tables)
     for k in axes(G, 2)
+        fill!(spec, 0)                                    # (a c2r transform may overwrite its input)
         spec[keep] .= view(G, :, k)
-        A[:, k] .= T.(irfft(spec, N)[1:nτ] ./ scale)
+        LinearAlgebra.mul!(buf, P, spec)
+        A[:, k] .= T.(view(buf, 1:nτ) ./ scale)
     end
     return A
 end
 
 """
 The time step of the injection tables: `dt/4`, or coarser for a band-limited source, 1/(100 fmax) with `fmax` the highest
-frequency of its spectrum above 1e-9 of the maximum (linear interpolation in time: relative error ≤ (2π f dτ)²/8, ≤ 5e-4
-at fmax, where the source is negligible). Long simulations otherwise need GB-sized tables.
+frequency of its spectrum above 1e-9 of the maximum, when that is larger (linear interpolation in time: relative error
+≤ (2π f dτ)²/8, ≤ 5e-4 at fmax, where the source is negligible). Long simulations otherwise need GB-sized tables.
 """
 function table_step(w::TeleseismicWave, stf, τ0, τ1, dt)
     dτ = dt / 4
     N = nextpow(2, ceil(Int, 2(τ1 - τ0) / dτ))
     S = abs.(rfft([w.amplitude * moment_rate(stf, t, 0.0, w.trise) for t in τ0 .+ (0:N-1) .* dτ]))
     fmax = (findlast(>(1e-9 * maximum(S)), S) - 1) / (N * dτ)
-    return fmax > 0 ? min(dτ, 1 / (100fmax)) : dτ
+    return fmax > 0 ? max(dτ, 1 / (100fmax)) : dτ
 end
 
 """
