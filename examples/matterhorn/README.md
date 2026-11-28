@@ -8,7 +8,8 @@ spectral elements), with the curvilinear SBP solver of SeismicWavePC.
 julia --project=examples/matterhorn -e 'using Pkg; Pkg.instantiate()'
 julia -t auto --project=examples/matterhorn examples/matterhorn/matterhorn_3d.jl metal 0.06   # 3D runs (Metal GPU; or cpu)
 julia --project=examples/matterhorn examples/matterhorn/analyze_3d.jl 60m                     # Figs. 2, 4, 5
-julia -t auto --project=examples/matterhorn examples/matterhorn/matterhorn_fig7.jl             # Fig. 7 (2D)
+julia -t auto --project=examples/matterhorn examples/matterhorn/matterhorn_fig7.jl 0.04 metal  # Fig. 7 (2D)
+julia --project=examples/matterhorn examples/matterhorn/fig7_paper_style.jl 0.04 [paper_fig7.png]   # Fig. 7 in the paper's style
 julia -t auto --project=examples/matterhorn examples/matterhorn/matterhorn_2d.jl               # Fig. 6 (2D, permafrost)
 ```
 
@@ -49,7 +50,9 @@ an Apple M4 Max GPU (Metal): 15 min per incoming wave. Summit: the highest point
 | summit/valley PGV (time domain) | ~3 (Fig. 4A) | EW 3.0, NS 5.8, Z 3.0 |
 | amplification map, 0.4 Hz Ricker | maximum at the summit, ridges lower | maximum 8.2× (relative to the minimum) at the summit; ridges and Dent d'Hérens 2–4× |
 
-![Spectra](matterhorn_3d_spectra_60m.png)
+![Summit and valley: seismograms, spectra, spectral ratios](matterhorn_3d_spectra_60m.png)
+
+![Amplification map, 0.4 Hz Ricker](matterhorn_3d_map_60m.png)
 
 The fundamental modes agree with the paper and with the ambient-noise measurements of Weber et al. (2022): two
 orthogonal modes near 0.42 Hz. Which horizontal component shows the larger 0.4 Hz ratio depends on the valley spectrum
@@ -82,4 +85,27 @@ the maximum in all three cases, and its value changes with the grid (60 m: 136-1
 the columns sample the sharp DEM differently. Smoothed over a fixed σ = 100 m (the summit of the section then at 4.30
 instead of 4.48 km), the model no longer changes with the grid:
 
-(numbers below)
+
+![Fig. 7: the paper (left) and SeismicWavePC (right)](matterhorn_fig7_comparison.png)
+
+Surface dQ, scenario A (summit horizontal PGV 1 cm/s; scenario B: × 30), maxima by flank and height band [kPa]
+(40 m grid; 30 m in brackets, a convergence check):
+
+| incidence | S flank 3800–4300 m | N flank 3800–4300 m | N shoulder 3300–3700 m | S flank 3000–3800 m | max (A / B) |
+|---|---|---|---|---|---|
+| vertical | 36 (36) | 35 (34) | 22 (22) | 20 (20) | 36 kPa / 1.1 MPa |
+| 45° from the north | 38 (38) | 46 (44) | 45 (47) | 32 (32) | 46 kPa / 1.4 MPa |
+| 45° from the south | 37 (38) | 30 (28) | 28 (27) | 26 (26) | 37 kPa / 1.1 MPa |
+
+Paper: maximum deviatoric stress on the flanks ≈ 40 kPa (A), > 1 MPa (B). As in the paper, the peak horizontal motion is
+at the summit in all three cases and the stress peaks on the flanks, not at the summit (5-10 kPa there). Waves from the
+north raise the stress on the northern flank and shoulder (35 → 46 kPa, 22 → 45 kPa) and over a broader area, and the
+southern flank below 3800 m (20 → 32 kPa), as described in the paper; waves from the south lower it on the northern
+flank (35 → 30 kPa). Unlike the paper, waves from the south do not raise the upper southern flank above its value under
+vertical incidence (37 vs 36 kPa; the paper: a strong increase above 3700 m), and the stress is spread over both upper
+flanks rather than concentrated on the southern one. Possible reasons: the polarity of the S wave relative to the P wave
+(not given in the paper), the smoothing of the topography, and the paper's source plane (forces on the z = 0 plane in the
+whole model versus a box injection here).
+
+Colour maps as the paper's colour bars (sampled from its figure): `:batlowW` for the ground velocity and `:vik` for dQ,
+both linear (`fig7_paper_style.jl`).
