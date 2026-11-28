@@ -50,3 +50,5 @@ in `~/Documents/Matterhorn_private` (a local git repository; run figure scripts 
   matterhorn-backup-before-rewrite).
 - 2026-11-28 19:10: all comparisons done (Figs. 1A, 2, 4, 5A, 6, 7, S2, S3, S4; pages in the private folder); RUNS.md written.
   Next: the PDF report in ~/Documents/Matterhorn_private/report.
+- 2026-11-28 19:15: report draft done (~/Documents/Matterhorn_private/report/Matterhorn_reproduction_Kaus.pdf, 17 pages,
+  8 MB; sources main/setup/methods/results.tex, compressed figures in report/figs). Waiting for user review.
