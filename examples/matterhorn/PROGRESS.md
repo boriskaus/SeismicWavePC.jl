@@ -18,13 +18,13 @@ workers 39 GB each) on the 64 GB laptop. Run heavy jobs one at a time (at most o
 ## To do (in this order)
 1. Fig. 7, 45° at z = 0 (56.7° in the half-space), both P/S polarities from the same runs:
    `matterhorn_fig7.jl 0.04 metal z0 plus` -> `matterhorn_fig7_*_40m_s100_pm.jls`; then `fig7_paper_style.jl 0.04
-   ../data/paper_figs/fig7.png z0 plus main` and `... minus opposite` (choose the polarity closer to the paper).
+   ~/Documents/Matterhorn_private/paper_figs/fig7.png z0 plus main` (with MATTERHORN_PRIVATE set) and `... minus opposite` (choose the polarity closer to the paper).
 2. Fig. 6 sweep (35 2D models): `matterhorn_fig6.jl run 0 1` (ONE worker), then `matterhorn_fig6.jl plot`.
 3. Fig. S3 surface PGV/dQ map: `matterhorn_s3.jl metal` (3D 100 m).
 4. Fig. S4 ridge profiles: `matterhorn_3d.jl metal 0.06 ridges`.
 5. Stacked comparisons (paper on top, ours below, A4 width) for Figs. 1A, 2, 4A-C, 5A, 6, 7, S2-S4; `RUNS.md` with
    every run (grid, nodes, dt, steps, backend, precision, wall time, smoothing, convergence).
-6. Report: results sections per figure, run table, unspecified inputs (P/S polarity, density, permafrost geometry),
+6. Report (in ~/Documents/Matterhorn_private/report, not on the branch): results sections per figure, run table, unspecified inputs (P/S polarity, density, permafrost geometry),
    reproduction instructions. Open question for the user: authors/affiliation on the title page.
 
 Private material (paper figures, comparison pages, the report with the paper's figures) lives OUTSIDE the repository
