@@ -2,9 +2,12 @@
 # CC BY 4.0 attribution of the paper's figure and notes at the bottom. Used by the figure scripts of this example.
 using CairoMakie, GeophysicalModelGenerator
 
-# The pages contain the paper's figures: they are written to examples/data/comparisons (git-ignored), never into the
-# repository, which holds only our own material (an open package).
-const COMPARE_DIR = joinpath(@__DIR__, "..", "data", "comparisons")
+# The pages contain the paper's figures: they are written to a private folder outside the repository (environment variable
+# MATTERHORN_PRIVATE; default examples/data, git-ignored), never into the repository, which holds only our own material
+# (an open package). The paper's figures are expected in its subfolder paper_figs.
+const PRIVATE = get(ENV, "MATTERHORN_PRIVATE", joinpath(@__DIR__, "..", "data"))
+const COMPARE_DIR = joinpath(PRIVATE, "comparisons")
+paper_fig(n) = joinpath(PRIVATE, "paper_figs", "fig$n.png")
 
 const ATTRIBUTION = "Top: Limberger, Rümpker, Kruse & Duretz (2025), Sci. Rep. 15, 23914, doi:10.1038/s41598-025-08218-5, CC BY 4.0" *
                     " (cropped to the Matterhorn panels where marked)."

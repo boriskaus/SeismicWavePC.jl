@@ -88,9 +88,10 @@ instead of 4.48 km), the model no longer changes with the grid:
 
 ![Fig. 7 in the paper's layout and colour maps (SeismicWavePC, 40 m)](matterhorn_fig7_paperstyle_40m.png)
 
-(The comparison pages with the paper's figures on top are made locally by the figure scripts, e.g.
-`fig7_paper_style.jl 0.04 ../data/paper_figs/fig7.png`, into `examples/data/comparisons/`; they are not part of the
-repository, which contains only our own material.)
+(Comparison pages with the paper's figures on top are made locally and kept outside the repository, which contains
+only our own model results: set `MATTERHORN_PRIVATE` to a private folder with the paper's figures in `paper_figs/`
+(fig1.png ... from the publisher, CC BY 4.0); the pages go to its `comparisons/`, e.g.
+`MATTERHORN_PRIVATE=~/my_private_folder julia --project=. fig7_paper_style.jl 0.04 ~/my_private_folder/paper_figs/fig7.png`.)
 
 Surface dQ, scenario A (summit horizontal PGV 1 cm/s; scenario B: × 30), maxima by flank and height band [kPa]
 (40 m grid; 30 m in brackets, a convergence check):

@@ -1,7 +1,0 @@
-build.log
-*.aux
-*.log
-*.out
-*.toc
-# the PDF includes the paper's figures (CC BY 4.0): kept out of the repository
-*.pdf

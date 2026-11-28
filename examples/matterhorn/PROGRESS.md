@@ -27,7 +27,10 @@ workers 39 GB each) on the 64 GB laptop. Run heavy jobs one at a time (at most o
 6. Report: results sections per figure, run table, unspecified inputs (P/S polarity, density, permafrost geometry),
    reproduction instructions. Open question for the user: authors/affiliation on the title page.
 
-Paper figures (CC BY 4.0) go to `examples/data/paper_figs/` (Springer media server
+Private material (paper figures, comparison pages, the report with the paper's figures) lives OUTSIDE the repository
+in `~/Documents/Matterhorn_private` (a local git repository; run figure scripts with
+`MATTERHORN_PRIVATE=~/Documents/Matterhorn_private`). The branch holds only our scripts and model results. Paper figures
+(CC BY 4.0) from the (Springer media server
 `https://media.springernature.com/full/springer-static/image/art%3A10.1038%2Fs41598-025-08218-5/MediaObjects/41598_2025_8218_Fig{n}_HTML.png`).
 
 ## Log
@@ -41,3 +44,5 @@ Paper figures (CC BY 4.0) go to `examples/data/paper_figs/` (Springer media serv
 - 2026-11-28 16:28: tasks 1 and 2 restarted with the fix (footprints 2.2 and 5.2 GB). Material from the paper is no longer
   tracked: comparison pages go to examples/data/comparisons, report PDF ignored (the old composite is still in the
   history, commit f94ad8b).
+- 2026-11-28 16:55: private folder ~/Documents/Matterhorn_private (paper figures, comparison pages, report sources, local
+  git); report removed from the branch.
