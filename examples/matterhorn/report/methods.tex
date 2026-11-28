@@ -1,0 +1,140 @@
+% Methods: governing equations and the curvilinear SBP-SAT discretization (as implemented in SeismicWavePC.jl)
+
+\section{Governing equations}\label{sec:equations}
+
+We solve the visco-elastic wave equation in velocity--stress form. Coordinates are $x$ (south to north in the 2D
+sections), $y$, and $z$ (elevation, positive up). In 2D (P-SV, plane strain in the $x$--$z$ plane) the unknowns are the
+particle velocities $v_x, v_z$ and the stresses $\sigma_{xx}, \sigma_{zz}, \sigma_{xz}$; in 3D also $v_y$, $\sigma_{yy}$,
+$\sigma_{xy}$, $\sigma_{yz}$. Conservation of momentum reads
+\begin{equation}
+  \rho\,\frac{\partial v_i}{\partial t} = \frac{\partial \sigma_{ij}}{\partial x_j},
+  \label{eq:momentum}
+\end{equation}
+with the density $\rho$ (summation over repeated indices). No body forces are applied in this study: the waves enter
+through the boundary of an injection box (Sec.~\ref{sec:injection}).
+
+\paragraph{Attenuation.} Constant $Q$ is modelled with a generalized Zener body of $L = 3$ relaxation mechanisms
+($\tau$-method of Blanch et al., 1995, as in OpenSWPC; Maeda et al., 2017). With the strain rates
+$\dot\varepsilon_{ij} = \tfrac12(\partial_j v_i + \partial_i v_j)$, the P-wave and shear moduli $M = \lambda + 2\mu$ and
+$\mu$, and the memory variables $r^{(l)}_{ij}$, $l = 1,\dots,L$,
+\begin{align}
+  \frac{\partial \sigma_{ij}}{\partial t} &=
+     \big[M(1+\tau_p) - 2\mu(1+\tau_s)\big]\,\dot\varepsilon_{kk}\,\delta_{ij}
+     + 2\mu(1+\tau_s)\,\dot\varepsilon_{ij} + \sum_{l=1}^{L} r^{(l)}_{ij},
+  \label{eq:stress}\\
+  \frac{\partial r^{(l)}_{ij}}{\partial t} &= -\frac{1}{\tau_{\sigma l}}\Big( r^{(l)}_{ij}
+     + \frac{1}{L}\Big[\big(M\tau_p - 2\mu\tau_s\big)\dot\varepsilon_{kk}\,\delta_{ij} + 2\mu\tau_s\,\dot\varepsilon_{ij}\Big]\Big).
+  \label{eq:memory}
+\end{align}
+The relaxation times $\tau_{\sigma l}$ are spaced logarithmically between $f_{\min}$ and $f_{\max}$ of the simulated band,
+$\tau_p = L\zeta/Q_p$ and $\tau_s = L\zeta/Q_s$, where $\zeta$ makes $Q$ constant over the band (Blanch et al., 1995). The
+moduli are scaled so that the phase velocities at the reference frequency equal the given $v_p$ and $v_s$. Without
+attenuation ($Q = \infty$), $\tau_p = \tau_s = 0$ and Eq.~\eqref{eq:stress} is Hooke's law. The memory variables are
+integrated with the Crank--Nicolson rule.
+
+\section{Discretization: curvilinear SBP-SAT finite differences}\label{sec:discretization}
+
+\paragraph{Terrain-following coordinates.} The physical domain is mapped onto a rectangle with coordinates $(\xi,\eta)$
+(3D: $(\xi,\psi,\eta)$). The grid columns are vertical and the top grid line follows the topography:
+\begin{equation}
+  x = \xi, \qquad (y = \psi), \qquad z = Z(\xi,\eta), \qquad
+  J = \frac{\partial Z}{\partial \eta} > 0, \quad J_x = -\frac{\partial Z}{\partial \xi}, \quad (J_y = -\frac{\partial Z}{\partial \psi}).
+\end{equation}
+The chain rule gives the derivatives
+\begin{equation}
+  \frac{\partial}{\partial x} = \frac{\partial}{\partial \xi} + \frac{J_x}{J}\frac{\partial}{\partial \eta}, \qquad
+  \frac{\partial}{\partial z} = \frac{1}{J}\frac{\partial}{\partial \eta},
+  \label{eq:chain}
+\end{equation}
+and, with the metric identity $\partial_\xi J + \partial_\eta J_x = 0$, the momentum equation in conservative form,
+\begin{equation}
+  \rho J\,\frac{\partial v_i}{\partial t} = \frac{\partial}{\partial \xi}\big(J\sigma_{ix}\big)
+     + \frac{\partial}{\partial \eta}\big(J_x\sigma_{ix} + \sigma_{iz}\big)
+  \qquad (i = x, z).
+  \label{eq:momentum_curv}
+\end{equation}
+The flux $T_i = J_x\sigma_{ix} + \sigma_{iz}$ through a grid line $\eta = $ const is the traction on that line times
+$|\nabla\eta|\,J$; at the free surface $T_i = 0$ is the traction-free condition.
+
+\paragraph{SBP operators.} Along each coordinate the derivative is approximated with \emph{dual-pairing upwind}
+summation-by-parts operators $D_+$, $D_-$ (Mattsson, 2017) with a diagonal, positive norm (quadrature) $H$. They satisfy
+\begin{equation}
+  H D_+ + \big(H D_-\big)^{\mathsf T} = B = e_N e_N^{\mathsf T} - e_1 e_1^{\mathsf T},
+  \label{eq:sbp}
+\end{equation}
+the discrete analogue of integration by parts, $\int u\,w' + \int u'\,w = [u\,w]$. We use the order-7 operators with the
+boundary-optimized closures of Mattsson, Niemelä \& Winters (2027), from SummationByPartsOperators.jl (Ranocha, 2021). The
+divergence in the momentum equation uses $D_-$, the gradient in the strain rates $D_+$:
+\begin{align}
+  \rho J\,\frac{d v_i}{dt} &= D_-^{\xi}\big(J\sigma_{ix}\big) + D_-^{\eta}\big(J_x\sigma_{ix} + \sigma_{iz}\big)
+     + \mathrm{SAT}_i , \label{eq:semi_momentum}\\
+  \dot\varepsilon_{xx} &= D_+^{\xi} v_x + \frac{J_x}{J} D_+^{\eta} v_x, \qquad
+  \dot\varepsilon_{zz} = \frac{1}{J} D_+^{\eta} v_z, \qquad
+  2\dot\varepsilon_{xz} = \frac{1}{J} D_+^{\eta} v_x + D_+^{\xi} v_z + \frac{J_x}{J} D_+^{\eta} v_z ,
+  \label{eq:semi_strain}
+\end{align}
+and the stresses follow from Eqs.~\eqref{eq:stress}--\eqref{eq:memory} node by node. All fields are collocated at the
+grid nodes.
+
+\paragraph{Boundary conditions (SAT).} Boundary and interface conditions are imposed weakly with simultaneous
+approximation terms (Carpenter et al., 1994). At the free surface (the top row $\eta_N$) the SAT removes the flux,
+\begin{equation}
+  \mathrm{SAT}_i = -\,H_\eta^{-1} e_N\, e_N^{\mathsf T}\big(J_x\sigma_{ix} + \sigma_{iz}\big),
+  \label{eq:sat_free}
+\end{equation}
+so that the discrete traction vanishes in the sense of the SBP norm. At the sides and the bottom the traction is replaced by
+the impedance condition $\sigma_{ij} n_j = -Z v_i$ (with $Z = \rho v_p$ for the normal and $\rho v_s$ for the tangential
+component), integrated implicitly with the trapezoidal rule, so that it does not restrict the time step; absorbing layers
+(below) take out the remaining waves. Material interfaces, where present, are grid lines between blocks; there half the
+traction mismatch enters the momentum equations and half the velocity mismatch the strain rates of both sides.
+
+\paragraph{Energy estimate.} With Eq.~\eqref{eq:sbp}, the boundary terms of $D_-^{\eta}$ in Eq.~\eqref{eq:semi_momentum}
+cancel against Eq.~\eqref{eq:sat_free}. For the elastic case the semi-discrete energy
+\begin{equation}
+  E = \frac12 \sum_{\text{nodes}} H_\xi H_\eta \Big( \rho J\, |v|^2 + J\,\sigma : \mathsf{C}^{-1} \sigma \Big)
+\end{equation}
+is therefore conserved by the interior scheme and the free surface, and it decreases at the impedance boundaries: the
+scheme is stable for any grid and any (smooth) topography. The absorbing layers below are not covered by this estimate. The same identity, $H A = -(H J G)^{\mathsf T}$ between the
+discrete divergence $A$ and gradient $G$ including the SAT terms, makes the discrete adjoint exact (used for misfit
+gradients; not needed here).
+
+\paragraph{Time stepping.} The velocities live at half time steps (leapfrog):
+\begin{equation}
+  v^{n+1/2} = v^{n-1/2} + \Delta t\, \mathcal{A}\big(\sigma^{n}\big), \qquad
+  \sigma^{n+1} = \sigma^{n} + \Delta t\, \mathcal{G}\big(v^{n+1/2}\big),
+\end{equation}
+with $\mathcal{A}$ and $\mathcal{G}$ the right-hand sides of Eqs.~\eqref{eq:semi_momentum} and
+\eqref{eq:stress}--\eqref{eq:semi_strain}. The scheme is stable for $\Delta t < 2/\sqrt{\lambda_{\max}}$, with
+$\lambda_{\max}$ the largest eigenvalue of $\mathcal{A}\mathcal{G}$, found by power iteration; we use 90\,\% of this limit.
+
+\paragraph{Absorbing layers.} The domain is surrounded by complex-frequency-shifted perfectly matched layers (CFS-PML)
+implemented with auxiliary differential equations (Zhang \& Shen, 2010), applied to the $\xi$ and $\eta$ parts of the SBP
+operators.
+
+\section{Plane-wave injection}\label{sec:injection}
+
+The incoming plane waves are injected with the total-field/scattered-field method: inside a box (sides and bottom; it
+reaches up to the free surface) the solver computes the total field, outside only the field scattered by the structure in
+the box, which the absorbing layers remove. The incoming field of the horizontally layered background, i.e.\ the plane
+wave together with its free-surface reflection and the reverberations in the layers, is computed exactly in the frequency
+domain (global matrix of up- and down-going waves). The velocity gradient is represented by one layer per mesh row.
+Every time step, the finite-difference stencils that cross the box boundary are corrected with this field. The angle of
+incidence is defined in the half-space below the model:
+\begin{equation}
+  p = \frac{\sin\theta_0}{v_0}, \qquad \sin\theta(z) = p\, v(z),
+  \label{eq:snell}
+\end{equation}
+so that the waves bend towards the vertical as the velocity decreases upwards. To reproduce an incidence of $45^\circ$ at
+$z = 0$ (the paper's tilted source plane), $\theta_0 = \arcsin\!\big(\sin 45^\circ\, v_p(-2\,\mathrm{km})/v_p(0)\big)
+\approx 56.8^\circ$. One wave type (P, or S polarized along $x$ or $y$) is injected per run, and the runs are summed.
+
+\section{Stress measure}\label{sec:dq}
+
+Following the paper's supplement, the dynamic stress is measured by the deviatoric stress
+\begin{equation}
+  \mathrm{d}Q = \sqrt{J_2}, \qquad J_2 = \tfrac12\, s_{ij} s_{ij}, \qquad
+  s_{ij} = \sigma_{ij} - P\,\delta_{ij}, \qquad P = \tfrac13\big(\sigma_{xx} + \sigma_{yy} + \sigma_{zz}\big),
+  \label{eq:dq}
+\end{equation}
+where in 2D the out-of-plane stress of plane strain, $\sigma_{yy} = \lambda(\varepsilon_{xx} + \varepsilon_{zz})
+= \nu(\sigma_{xx} + \sigma_{zz})$, is included. Figure~7 shows, at every node, the maximum over time of $\mathrm{d}Q$.
