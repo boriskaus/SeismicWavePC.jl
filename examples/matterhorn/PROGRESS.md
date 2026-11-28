@@ -32,3 +32,6 @@ Paper figures (CC BY 4.0) go to `examples/data/paper_figs/` (Springer media serv
 
 ## Log
 - 2026-11-28 15:40: resumed after the reboot; WIP scripts committed (61548f1), report draft recovered (94c8750).
+- 2026-11-28 15:41: started task 1 (Fig. 7 z0, Metal, guard 16 GB: footprint ~6 GB) and task 2 (Fig. 6 sweep, one CPU
+  worker, guard 12 GB). Logs and footprint traces in examples/data/logs/. Paper figures re-downloaded to
+  examples/data/paper_figs/ (supplement not yet).
