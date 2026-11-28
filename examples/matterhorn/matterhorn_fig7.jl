@@ -35,52 +35,67 @@ k0 = findfirst(k -> minimum(Z[I, k]) >= 1.0, 1:nz)                # rows above ~
 K = k0:nz
 Xr, Zr = 1e3 .* X[I, K], 1e3 .* Z[I, K]                           # m
 ρ, vp, vs = (model.fields[f][I, 1, K] for f in (:rho, :vp, :vs))
-μ = ρ .* (1e3vs) .^ 2
-λ = ρ .* (1e3vp) .^ 2 .- 2μ
-ν = λ ./ (2 .* (λ .+ μ))
+const μ = ρ .* (1e3vs) .^ 2                                      # (const: used in the callback, which must not allocate)
+const λ = ρ .* (1e3vp) .^ 2 .- 2μ
+const ν = λ ./ (2 .* (λ .+ μ))
 
-"Derivative along the dimension `dim` in index space: central inside, 2nd-order one-sided at the ends."
-function d1(A, dim)
-    B = similar(A)
-    n = size(A, dim)
-    for j in axes(A, 3 - dim)
-        a = dim == 1 ? view(A, :, j) : view(A, j, :)
-        b = dim == 1 ? view(B, :, j) : view(B, j, :)
-        for i in 2:n-1
-            b[i] = (a[i+1] - a[i-1]) / 2
+"""
+Derivative along the dimension `dim` of a matrix in index space (central inside, 2nd-order one-sided at the ends), into
+`B`. (Type-stable loops: this runs in the snapshot callback thousands of times; views chosen per call allocated per element.)
+"""
+function d1!(B, A, dim)
+    n1, n2 = size(A)
+    if dim == 1
+        @inbounds for j in 1:n2
+            for i in 2:n1-1
+                B[i, j] = (A[i+1, j] - A[i-1, j]) / 2
+            end
+            B[1, j] = (-3A[1, j] + 4A[2, j] - A[3, j]) / 2
+            B[n1, j] = (3A[n1, j] - 4A[n1-1, j] + A[n1-2, j]) / 2
         end
-        b[1] = (-3a[1] + 4a[2] - a[3]) / 2
-        b[n] = (3a[n] - 4a[n-1] + a[n-2]) / 2
+    else
+        @inbounds for j in 2:n2-1, i in 1:n1
+            B[i, j] = (A[i, j+1] - A[i, j-1]) / 2
+        end
+        @inbounds for i in 1:n1
+            B[i, 1] = (-3A[i, 1] + 4A[i, 2] - A[i, 3]) / 2
+            B[i, n2] = (3A[i, n2] - 4A[i, n2-1] + A[i, n2-2]) / 2
+        end
     end
     return B
 end
+d1(A, dim) = d1!(similar(A), A, dim)
 const XI, XK, ZI, ZK = d1(Xr, 1), d1(Xr, 2), d1(Zr, 1), d1(Zr, 2)
 const JAC = XI .* ZK .- XK .* ZI
 
-"Derivatives ∂f/∂x, ∂f/∂z of a field on the (columns, rows) mesh (index-space differences and the chain rule)."
-function dxdz(f)
-    fi, fk = d1(f, 1), d1(f, 2)
-    return (fi .* ZK .- fk .* ZI) ./ JAC, (fk .* XI .- fi .* XK) ./ JAC
-end
-
 "Running maxima of |v_h|, |v_z| and dQ, updated with the velocities `vx`, `vz` of one snapshot (interval `h`)."
-mutable struct Peaks
+struct Peaks
     ux::Matrix{Float64}; uz::Matrix{Float64}; vxo::Matrix{Float64}; vzo::Matrix{Float64}
     vh::Matrix{Float64}; vv::Matrix{Float64}; dq::Matrix{Float64}
+    w::NTuple{4,Matrix{Float64}}                                  # (work arrays: index-space derivatives)
 end
-Peaks() = Peaks((zeros(size(Xr)) for _ in 1:7)...)
+Peaks() = Peaks((zeros(size(Xr)) for _ in 1:7)..., ntuple(_ -> zeros(size(Xr)), 4))
+"""
+Update with the velocities of one snapshot: the displacement (trapezoidal), its gradient (index-space differences and the
+chain rule), the elastic plane-strain stress (σyy = ν (σxx + σzz)) and dQ = √J2 of its deviatoric part.
+"""
 function update!(q::Peaks, vx, vz, h)
     q.ux .+= (vx .+ q.vxo) .* (h / 2); q.uz .+= (vz .+ q.vzo) .* (h / 2)
     q.vxo .= vx; q.vzo .= vz
     q.vh .= max.(q.vh, abs.(vx)); q.vv .= max.(q.vv, abs.(vz))
-    uxx, uxz = dxdz(q.ux); uzx, uzz = dxdz(q.uz)
-    sxx = (λ .+ 2μ) .* uxx .+ λ .* uzz
-    szz = λ .* uxx .+ (λ .+ 2μ) .* uzz
-    sxz = μ .* (uxz .+ uzx)
-    syy = ν .* (sxx .+ szz)
-    P = -(sxx .+ syy .+ szz) ./ 3
-    J2 = ((sxx .+ P) .^ 2 .+ (syy .+ P) .^ 2 .+ (szz .+ P) .^ 2 .+ 2 .* sxz .^ 2) ./ 2
-    q.dq .= max.(q.dq, sqrt.(J2))
+    uxi, uxk, uzi, uzk = d1!(q.w[1], q.ux, 1), d1!(q.w[2], q.ux, 2), d1!(q.w[3], q.uz, 1), d1!(q.w[4], q.uz, 2)
+    @inbounds for n in eachindex(q.dq)
+        uxx, uxz = (uxi[n] * ZK[n] - uxk[n] * ZI[n]) / JAC[n], (uxk[n] * XI[n] - uxi[n] * XK[n]) / JAC[n]
+        uzx, uzz = (uzi[n] * ZK[n] - uzk[n] * ZI[n]) / JAC[n], (uzk[n] * XI[n] - uzi[n] * XK[n]) / JAC[n]
+        l, m = λ[n], μ[n]
+        sxx = (l + 2m) * uxx + l * uzz
+        szz = l * uxx + (l + 2m) * uzz
+        sxz = m * (uxz + uzx)
+        syy = ν[n] * (sxx + szz)
+        P = -(sxx + syy + szz) / 3
+        J2 = ((sxx + P)^2 + (syy + P)^2 + (szz + P)^2 + 2sxz^2) / 2
+        q.dq[n] = max(q.dq[n], sqrt(J2))
+    end
     return q
 end
 
