@@ -35,3 +35,9 @@ Paper figures (CC BY 4.0) go to `examples/data/paper_figs/` (Springer media serv
 - 2026-11-28 15:41: started task 1 (Fig. 7 z0, Metal, guard 16 GB: footprint ~6 GB) and task 2 (Fig. 6 sweep, one CPU
   worker, guard 12 GB). Logs and footprint traces in examples/data/logs/. Paper figures re-downloaded to
   examples/data/paper_figs/ (supplement not yet).
+- 2026-11-28 15:43-16:20: the guard killed the restarted jobs (setup spikes of 23-57 GB). Cause: TeleseismicWave injection
+  tables (full spectra per depth, per-column irfft garbage, depth grid at 1/8 of the SBP surface spacing). Fixed in
+  114f544 + a550403 (setup now ~3 GB; seismograms change ≤ 5e-6); PR #15 to main (fix-injection-memory).
+- 2026-11-28 16:28: tasks 1 and 2 restarted with the fix (footprints 2.2 and 5.2 GB). Material from the paper is no longer
+  tracked: comparison pages go to examples/data/comparisons, report PDF ignored (the old composite is still in the
+  history, commit f94ad8b).
