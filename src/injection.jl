@@ -235,13 +235,32 @@ function rotation(::Val{:sh}, e, θ)
             Sxz=((2, tx),), Sxy=((3, ex * ty + ey * tx),))
 end
 
-"Time series (columns: depths) from the spectra `G[ω, depth]`: the first `nτ` samples, divided by `scale`."
-function time_table(G::Matrix{ComplexF64}, N, nτ, scale, ::Type{T})::Matrix{T} where {T}
+"""
+Time series (columns: depths) from the spectra `G[q, depth]` at the frequencies `keep[q]` of a real FFT of length `N` (the
+others are zero): the first `nτ` samples, divided by `scale`. (Only the frequencies of the source are stored: a full
+spectrum per depth needs tens of GB for long simulations.)
+"""
+function time_table(G::Matrix{ComplexF64}, keep, N, nτ, scale, ::Type{T})::Matrix{T} where {T}
     A = Matrix{T}(undef, nτ, size(G, 2))
+    spec = zeros(ComplexF64, N ÷ 2 + 1)
     for k in axes(G, 2)
-        A[:, k] .= T.(irfft(G[:, k], N)[1:nτ] ./ scale)
+        spec[keep] .= view(G, :, k)
+        A[:, k] .= T.(irfft(spec, N)[1:nτ] ./ scale)
     end
     return A
+end
+
+"""
+The time step of the injection tables: `dt/4`, or coarser for a band-limited source, 1/(100 fmax) with `fmax` the highest
+frequency of its spectrum above 1e-9 of the maximum (linear interpolation in time: relative error ≤ (2π f dτ)²/8, ≤ 5e-4
+at fmax, where the source is negligible). Long simulations otherwise need GB-sized tables.
+"""
+function table_step(w::TeleseismicWave, stf, τ0, τ1, dt)
+    dτ = dt / 4
+    N = nextpow(2, ceil(Int, 2(τ1 - τ0) / dτ))
+    S = abs.(rfft([w.amplitude * moment_rate(stf, t, 0.0, w.trise) for t in τ0 .+ (0:N-1) .* dτ]))
+    fmax = (findlast(>(1e-9 * maximum(S)), S) - 1) / (N * dτ)
+    return fmax > 0 ? min(dτ, 1 / (100fmax)) : dτ
 end
 
 """
@@ -259,17 +278,17 @@ function injection_tables(w::TeleseismicWave, ::Val{mode}, fk::Val{m}, rot, p, L
     comps = injection_components(Val(mode))
     names = keys(comps)
     depth(k, face) = (face ? g.zf[k] : g.zc[k]) - zs
-    G = Dict(n => zeros(ComplexF64, N ÷ 2 + 1, kmax) for n in names)
-    for q in keep
+    G = Dict(n => zeros(ComplexF64, length(keep), kmax) for n in names)
+    for (iq, q) in enumerate(keep)
         amp, W = layer_amplitudes(L, p, wave, ω[q], fk)
         for n in names, k in 1:kmax
             f = layer_field(L, amp, W, ω[q], depth(k, comps[n][end]), fk)
             v = sum((f[c] * a for (c, a) in rot[n]); init=0.0im)
-            G[n][q, k] = first(string(n)) == 'V' ? S[q] * v : -S[q] * v          # velocities: G S; stresses: -σ̃ S
+            G[n][iq, k] = first(string(n)) == 'V' ? S[q] * v : -S[q] * v         # velocities: G S; stresses: -σ̃ S
         end
     end
     nτ = ceil(Int, (τ1 - τ0) / dτ) + 2
-    return NamedTuple{names}(map(n -> time_table(G[n], N, nτ, scale, T), names))
+    return NamedTuple{names}(map(n -> time_table(G[n], keep, N, nτ, scale, T), names))
 end
 
 # ------------------------------------------------------------------ setup and correction kernels

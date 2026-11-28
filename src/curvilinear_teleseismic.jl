@@ -47,11 +47,14 @@ function teleseismic_cv(w::TeleseismicWave, N, sh, c)
         end
     end
     L = Layers(tops, ρs, λs, μs)
-    # the depth grid of the tables: from the surface to 6 nodes below the box, spacing an eighth of the finest node spacing
+    # the depth grid of the tables: the depths of the rows of this column (the nodes along the box lie on them where the rows
+    # are flat), each interval split in 4 (rows that are not flat: interpolated), to one interval below the bottom. (A
+    # uniform grid at the finest spacing, that of the SBP closure at the surface, needs GB-sized tables.)
     dmax = zs - Zcol[1]                                 # (to the bottom: the rows need not be flat)
     hz = minimum(diff(Zcol[max(kB - 8, 1):end]))
-    dz = hz / 8
-    zt = collect(0.0:dz:dmax+dz)
+    dr = unique(sort(zs .- Zcol))
+    zt = [dr[1]; [dr[q] + s / 4 * (dr[q+1] - dr[q]) for q in 1:length(dr)-1 for s in 1:4]]
+    push!(zt, 2zt[end] - zt[end-1])
     # (one-sided columns at the layer boundaries: σxx jumps; a node on an interface row takes the side of its block)
     nreg = length(zt)
     zt = [zt; [z + q * 1e-6 for z in L.top[2:end] for q in (-1, 1)]]
@@ -71,9 +74,9 @@ function teleseismic_cv(w::TeleseismicWave, N, sh, c)
     ext = N == 3 ? ((gx[1], gx[end]), (gy[1], gy[end])) : ((gx[1], gx[end]),)
     pmin = sum(ntuple(a -> min(pv[a] * ext[a][1], pv[a] * ext[a][2]), Val(N - 1)))
     pmax = sum(ntuple(a -> max(pv[a] * ext[a][1], pv[a] * ext[a][2]), Val(N - 1)))
-    dτ = dt / 4
     τ0 = min(tbeg - tshift - pmax - 2dt, -(vertical_delay(L, ηs, 0.0) - vertical_delay(L, ηs, dmax)) - 2w.trise)
     τ1 = tbeg + (nt + 1) * dt - tshift - pmin + 2dt
+    dτ = table_step(w, stf, τ0, τ1, dt)
     fk = w.wave === :sh ? Val(:sh) : Val(:psv)
     e = N == 2 ? (e3[1], 0.0) : e3
     θ = N == 2 ? (0.0, e3[1]) : (-e3[2], e3[1])
@@ -108,7 +111,9 @@ function teleseismic_cv(w::TeleseismicWave, N, sh, c)
     # the position of every local node in the tables (column, fractional): its depth; on an interface row the one-sided
     # column of its side (the block above an interface: the upper layer)
     function position(b, H)
-        P = (zs .- c.loc(H.Z)) ./ dz
+        zr = view(zt, 1:nreg)                            # (0-based fractional column in the regular part)
+        frac(d) = (j = clamp(searchsortedlast(zr, d), 1, nreg - 1); (j - 1) + (d - zr[j]) / (zr[j+1] - zr[j]))
+        P = frac.(zs .- c.loc(H.Z))
         for (q, top) in enumerate(L.top[2:end]), I in CartesianIndices(P)
             k = I[N]
             onrow = (k == 1 && b > 1) || (k == H.nz && b < nb)
@@ -119,7 +124,7 @@ function teleseismic_cv(w::TeleseismicWave, N, sh, c)
     end
     Zn = Tuple(position(b, H) for (b, H) in enumerate(hostblocks))
     gxd = dev(FT.(gx)); gyd = N == 3 ? dev(FT.(gy)) : nothing
-    W = (; tab=map(dev, tabs), flip, τ0=FT(τ0), dτ=FT(dτ), dz=FT(dz), zs=FT(zs), p=FT.(pv), tshift=FT(tshift), gx=gxd, gy=gyd,
+    W = (; tab=map(dev, tabs), flip, τ0=FT(τ0), dτ=FT(dτ), zs=FT(zs), p=FT.(pv), tshift=FT(tshift), gx=gxd, gy=gyd,
          i1=Int32(i1), i2=Int32(i2), j1=Int32(j1), j2=Int32(j2), kB=Int32(kB), bB=Int32(bB), r0=Tuple(Int32.(r0)), Zn,
          b=dev(band.b), i=dev(band.i), j=dev(band.j), k=dev(band.k))
     return W, length(band.b), (; layers=L, zs, kB, i1, i2, j1, j2, p=pv, tshift)
@@ -132,19 +137,19 @@ function teleseismic_tables_cv(w, fk::Val{m}, rot, p, L, zt, names, τ0, τ1, d�
     S = rfft([w.amplitude * moment_rate(stf, t, 0.0, w.trise) for t in τ0 .+ (0:N-1) .* dτ])
     ω = 2π .* (0:N÷2) ./ (N * dτ)
     keep = findall(>(1e-9 * maximum(abs, S)), abs.(S))
-    G = Dict(n => zeros(ComplexF64, N ÷ 2 + 1, length(zt)) for n in names)
-    for q in keep
+    G = Dict(n => zeros(ComplexF64, length(keep), length(zt)) for n in names)
+    for (iq, q) in enumerate(keep)
         amp, Wl = layer_amplitudes(L, p, wave, ω[q], fk)
         for (kz, z) in enumerate(zt)
             f = layer_field(L, amp, Wl, ω[q], z, fk)
             for n in names
                 v = sum((f[cc] * a for (cc, a) in rot[n]); init=0.0im)
-                G[n][q, kz] = first(string(n)) == 'V' ? S[q] * v : -S[q] * v
+                G[n][iq, kz] = first(string(n)) == 'V' ? S[q] * v : -S[q] * v
             end
         end
     end
     nτ = ceil(Int, (τ1 - τ0) / dτ) + 2
-    return NamedTuple{names}(map(n -> time_table(G[n], N, nτ, 1.0, T), names))
+    return NamedTuple{names}(map(n -> time_table(G[n], keep, N, nτ, 1.0, T), names))
 end
 
 "Is the node (global column ig, jg, mesh row kg) inside the box?  Is it within 4 rows of its bottom (the η corrections)?"
