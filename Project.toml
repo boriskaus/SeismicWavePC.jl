@@ -1,6 +1,6 @@
 name = "SeismicWavePC"
 uuid = "2a62f5b1-65eb-4f43-9ac1-72d262d189d8"
-version = "0.2.3"
+version = "0.2.4"
 authors = ["Boris Kaus <kaus@uni-mainz.de>"]
 
 [deps]
