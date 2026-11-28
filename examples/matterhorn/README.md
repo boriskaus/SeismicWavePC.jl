@@ -67,3 +67,19 @@ plane wave arrives with the impedance-corrected amplitude (√(ρ₆ vp₆/ρ vp
 ~30 %, Fig. 6C, for 600 m and +50 %; its permafrost geometry is only shown as a sketch).
 
 ![2D spectra](matterhorn_2d_spectra.png)
+
+**2D N-S section, Fig. 7 (peak velocity and deviatoric stress; the priority of this reproduction):**
+`matterhorn_fig7.jl [dx] [cpu|metal]`. Plane waves vertically, at 45° from the north and from the south, P + 1.7 SV
+(both at the same angle; `TeleseismicWave`, one per run, summed in the callback of the second run), Ormsby wavelet.
+Per node the running maxima of |v_x|, |v_z| and dQ = √J2 (the supplement's definition: J2 of the deviatoric stress,
+plane strain σyy = ν(σxx + σzz), P = −(σxx + σyy + σzz)/3), from the stresses of the integrated displacements (elastic
+moduli; strain by differences on the mesh, second order at the surface), sampled every ~10 ms. Scaled to the paper's
+scenarios: summit horizontal PGV 1 cm/s (A) and 30 cm/s (B).
+
+The stresses at the surface depend on how sharp the topography is. With the DEM smoothed over σ = 40 m (below the grid
+spacing) the corner between the north face and the shoulder (≈ 3.55 km, the paper's "salient point" near 3400 m) holds
+the maximum in all three cases, and its value changes with the grid (60 m: 136-189 kPa, 40 m: 62-82 kPa, scenario A):
+the columns sample the sharp DEM differently. Smoothed over a fixed σ = 100 m (the summit of the section then at 4.30
+instead of 4.48 km), the model no longer changes with the grid:
+
+(numbers below)

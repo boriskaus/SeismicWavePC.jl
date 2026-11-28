@@ -67,8 +67,8 @@ end
 The 2D north-south section through the summit (x pointing north): mesh, model and the surface height `sec(x)` [km], for
 the node spacing `dx` and `na` PML nodes.
 """
-function section_model(dx, na)
-    topo3 = matterhorn_surface()
+function section_model(dx, na; σ=0.04)
+    topo3 = matterhorn_surface(; σ)
     sec(x) = topo3(0.0, x)
     L = BOX + (na + SeismicWavePC.SBP_NB + 10) * dx
     bottom = Z_BOT - (na + SeismicWavePC.SBP_NB + 12) * 0.75dx

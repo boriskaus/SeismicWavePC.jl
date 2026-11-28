@@ -20,8 +20,9 @@ const DEVICE = length(ARGS) >= 2 ? ARGS[2] : "cpu"
 DEVICE == "metal" && using Metal
 const BACKEND, FT = DEVICE == "metal" ? (MetalBackend(), Float32) : (CPU(), Float64)
 const NA7, TMAX7, DT_CB = 20, 25.0, 0.01
+const SIG7 = 0.1                                                  # DEM smoothing [km]: a fixed scale, independent of dx
 
-mesh, model, sec = section_model(DX7, NA7)
+mesh, model, sec = section_model(DX7, NA7; σ=SIG7)
 X, Z = mesh.x.val[:, 1, :], mesh.z.val[:, 1, :]                  # km
 nx, nz = size(X)
 I = findall(x -> abs(x) <= 4.3, X[:, end])                        # the columns of the figure
@@ -59,7 +60,7 @@ end
 
 "The peaks of |v_h|, |v_z| and dQ for the plane waves of `wave` (angle, backazimuth), P + 1.7 SV."
 function peaks(angle, baz)
-    file = joinpath(@__DIR__, "..", "data", "matterhorn_fig7_$(round(Int, angle))_$(round(Int, baz))_$(round(Int, 1e3DX7))m.jls")
+    file = joinpath(@__DIR__, "..", "data", "matterhorn_fig7_$(round(Int, angle))_$(round(Int, baz))_$(round(Int, 1e3DX7))m_s$(round(Int, 1e3SIG7)).jls")
     isfile(file) && return deserialize(file)
     stf = ormsby_stf()
     box = (-BOX, BOX, Z_BOT)
@@ -122,6 +123,19 @@ for ((a, b, lab), r) in zip(cases, R)
             1e-3s * r.dq[north[qn], top], zs[north[qn]], 1e-3s * r.dq[south[qs], top], zs[south[qs]])
 end
 
+# surface dQ (A) by flank and elevation band: the paper describes the southern flank at 3800-4300 m and a salient point on
+# the northern side near 3400 m (here the corner between the north face and the shoulder, whose peak grows with
+# resolution: a stress concentration at a re-entrant corner)
+println("  surface dQ (scenario A, kPa) by band: S 3800-4300 m | N 3800-4300 m | N shoulder 3300-3700 m | S 3000-3800 m | summit")
+for ((a, b, lab), r) in zip(cases, R)
+    s = 0.01 / r.vh[isum, top]
+    q = 1e-3s .* r.dq[:, top]
+    sel(side, z1, z2) = [i for i in eachindex(q) if side * Xr[i, top] > 50 && z1 <= zs[i] <= z2]
+    mx(v) = isempty(v) ? NaN : maximum(q[v])
+    @printf("  %-20s %5.0f | %5.0f | %5.0f | %5.0f | %5.0f\n", lab, mx(sel(-1, 3800, 4300)), mx(sel(1, 3800, 4300)), mx(sel(1, 3300, 3700)),
+            mx(sel(-1, 3000, 3800)), q[isum])
+end
+
 # --- the 3 × 3 figure (A-C horizontal, D-F vertical PGV, G-I dQ; scenario A values, B = 30×)
 nI, nK = size(Xr)
 verts = [vec(Xr) ./ 1e3 vec(Zr) ./ 1e3]                           # node (i, k) is row i + (k - 1) nI
@@ -138,12 +152,12 @@ for (j, ((a, b, lab), r, s)) in enumerate(zip(cases, R, s_all))
                   ylabel=j == 1 ? "elevation (km)" : "", aspect=DataAspect())
         m = mesh!(ax, verts, faces, color=clamp.(vec(F), crange...), colormap=cmap, colorscale=log10, colorrange=crange, shading=NoShading)
         lines!(ax, Xr[:, top] ./ 1e3, Zr[:, top] ./ 1e3, color=:black, linewidth=1)
-        xlims!(ax, -1.3, 1.5); ylims!(ax, 2.8, 4.55)
+        xlims!(ax, -1.3, 1.5); ylims!(ax, 2.85, 4.55)              # (the stored rows start at 2.81 km below the summit)
         j == 3 && Colorbar(fig[row, 4], m, label=unit)
         dir = a == 0 ? 0 : b == 90.0 ? -1 : 1                    # P-wave direction (x north, z up)
         x0 = dir == 0 ? collect(-0.6:0.3:0.6) : [-dir * 0.9]
         arrows2d!(ax, x0, fill(2.9, length(x0)), fill(dir * 0.25, length(x0)), fill(0.25, length(x0)), color=:white)
     end
 end
-save(joinpath(@__DIR__, "matterhorn_fig7_$(round(Int, 1e3DX7))m.png"), fig)
-println("saved matterhorn_fig7_$(round(Int, 1e3DX7))m.png")
+save(joinpath(@__DIR__, "matterhorn_fig7_$(round(Int, 1e3DX7))m_s$(round(Int, 1e3SIG7)).png"), fig)
+println("saved matterhorn_fig7_$(round(Int, 1e3DX7))m_s$(round(Int, 1e3SIG7)).png")
