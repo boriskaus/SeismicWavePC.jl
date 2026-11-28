@@ -14,7 +14,7 @@ import ImplicitGlobalGrid as IGG
 import MPI
 using Printf
 using Serialization: serialize, deserialize
-using FFTW: fft, ifft, fftfreq, rfft, irfft
+using FFTW: fft, ifft, fftfreq, rfft, irfft, plan_irfft
 using SparseArrays: sparse
 using LinearAlgebra: LinearAlgebra
 import Random
