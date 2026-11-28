@@ -46,3 +46,5 @@ in `~/Documents/Matterhorn_private` (a local git repository; run figure scripts 
   history, commit f94ad8b).
 - 2026-11-28 16:55: private folder ~/Documents/Matterhorn_private (paper figures, comparison pages, report sources, local
   git); report removed from the branch.
+- 2026-11-28 17:05: branch history rewritten without the old Fig. 7 composite (force-push f357047; local backup branch
+  matterhorn-backup-before-rewrite).
